@@ -1,0 +1,27 @@
+{
+  "name": "vision-land",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "dev": "node server/dev.js",
+    "build": "node server/build.js",
+    "start": "NODE_ENV=production node --env-file-if-exists=.env server/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "gloaming-instruments": "file:../Documents/gloaming-instruments",
+    "google-auth-library": "^11.1.0",
+    "htm": "^3.1.1",
+    "pg": "^8.23.0",
+    "preact": "^10.29.8"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "esbuild": "^0.28.2"
+  }
+}
