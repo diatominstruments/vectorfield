@@ -1,22 +1,24 @@
 import { useEffect, useRef } from 'preact/hooks';
 import { GloamingKit } from 'gloaming-kit';
 import { html } from '../lib.js';
-import { blockTimes, visualsInEffect } from '../../shared/song.js';
+import { blockTimes, stylesInEffect, visualsInEffect } from '../../shared/song.js';
 
 /**
  * The kit's timeline for a song: one window per block, showing the visuals
  * in effect there. A block without visuals repeats the previous block's
  * entries, and since the kit keys instances by their settings, those carry
- * on across the boundary without restarting.
+ * on across the boundary without restarting. A block's style changes carry
+ * on the same way, setting by setting.
  */
 export function songTimeline(doc) {
   const times = blockTimes(doc);
   const inEffect = visualsInEffect(doc);
+  const styles = stylesInEffect(doc);
   return doc.arrangement.map((block, i) => ({
     from: times[i].start,
     to: times[i].end,
     visualizations: inEffect[i].visuals.map((v) => ({ id: v.viz, bind: v.bind, options: v.options })),
-    style: block.style,
+    style: styles[i],
   }));
 }
 

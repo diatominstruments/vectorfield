@@ -28,7 +28,8 @@ export { SongError };
  *
  * An arrangement block plays one pattern; the same pattern may appear in any
  * number of blocks. A block also carries the visualizations shown while it
- * plays and an optional style override — see visuals.js.
+ * plays and an optional style override, which carries on through later
+ * blocks until one changes the same setting — see visuals.js.
  *
  * Both sides run normalizeSong(): the client so the editor only ever holds
  * a valid song, the server because it can't trust the client.
@@ -123,6 +124,20 @@ export function visualsInEffect(song) {
   });
 }
 
+/**
+ * The style overrides in effect during each block. Each setting a block
+ * changes carries on through later blocks until one changes it again;
+ * settings no block has changed yet come from the song look. Returns, per
+ * block, the accumulated overrides, or null while there are none.
+ */
+export function stylesInEffect(song) {
+  let current = null;
+  return song.arrangement.map((block) => {
+    if (block.style) current = { ...current, ...block.style };
+    return current;
+  });
+}
+
 /** Start and end of each arrangement block, in seconds. */
 export function blockTimes(song) {
   const byId = new Map(song.patterns.map((p) => [p.id, p]));
@@ -135,20 +150,18 @@ export function blockTimes(song) {
   });
 }
 
-/** A fresh song: drums, bass and keys, with a four-on-the-floor to start from. */
+/**
+ * A fresh song: a blank canvas. No tracks and no visuals, just one empty
+ * pattern placed once in the arrangement, ready to build on.
+ */
 export function defaultSong() {
-  const drums = newTrack('drum-synth', 'Drums');
-  const bass = newTrack('mono-synth', 'Bass');
-  const keys = newTrack('fm-synth', 'Keys');
-  keys.effects.push(moduleEntry('reverb'));
   const pattern = newPattern('Pattern 1');
-  pattern.notes[drums.id] = [0, 4, 8, 12].map((step) => ({ step, note: 36, velocity: 1, length: 1 }));
   return {
     bpm: 120,
-    tracks: [drums, bass, keys],
+    tracks: [],
     mix: { effects: [] },
     patterns: [pattern],
-    arrangement: [newBlock(pattern.id, [newVisual('eq-bars')])],
+    arrangement: [newBlock(pattern.id)],
     look: { ...DEFAULT_LOOK },
   };
 }

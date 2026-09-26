@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { BounceSim } from '../client/bounce-sim.js';
 import { BALL_RADIUS, defaultBounce, normalizeBounce, segmentAt } from '../shared/bounce.js';
-import { defaultSong, normalizeSong, sequencerOf, SongError } from '../shared/song.js';
+import { normalizeSong, sequencerOf, SongError } from '../shared/song.js';
+import { sampleSong } from './fixtures.js';
 
 const config = (balls, extra = {}) => ({ ...defaultBounce(), jitter: 0, collide: false, speed: 1, balls, ...extra });
 
@@ -74,7 +75,7 @@ test('bounce settings are validated and clamped', () => {
 });
 
 test('each track in a pattern picks its own sequencer', () => {
-  const song = defaultSong();
+  const song = sampleSong();
   const [drums, bass, keys] = song.tracks;
   const [pattern] = song.patterns;
   pattern.sequencers = { [keys.id]: 'bounce', [bass.id]: 'nonsense', ghost: 'bounce' };
@@ -86,7 +87,7 @@ test('each track in a pattern picks its own sequencer', () => {
 });
 
 test('switching a track back to steps keeps its bounce settings', () => {
-  const song = defaultSong();
+  const song = sampleSong();
   const keys = song.tracks[2];
   const [pattern] = song.patterns;
   pattern.bounce = { [keys.id]: { ...defaultBounce(), speed: 2.5 } };
@@ -97,7 +98,7 @@ test('switching a track back to steps keeps its bounce settings', () => {
 });
 
 test('patterns saved with one pattern-wide bounce move it to its track', () => {
-  const song = defaultSong();
+  const song = sampleSong();
   const [drums, , keys] = song.tracks;
   const [pattern] = song.patterns;
   pattern.kind = 'bounce';

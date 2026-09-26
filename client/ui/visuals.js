@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { catalog, describe } from 'gloaming-kit';
 import { html, hue, useEngineEvent } from '../lib.js';
-import { blockTimes, newVisual, visualsInEffect } from '../../shared/song.js';
+import { blockTimes, newVisual, stylesInEffect, visualsInEffect } from '../../shared/song.js';
 import { VISUAL_LIMITS } from '../../shared/visuals.js';
 import { VisualPanel, LookPanel, vizLabel } from './visual-config.js';
 import { VisualCanvas, songTimeline } from './visual-canvas.js';
@@ -45,6 +45,9 @@ export function VisualsView({ store, engine }) {
   const patterns = new Map(doc.patterns.map((p, i) => [p.id, { p, i }]));
   const times = blockTimes(doc);
   const inEffect = visualsInEffect(doc);
+  const styles = stylesInEffect(doc);
+  // The look a block starts from: the song look plus earlier blocks' changes.
+  const lookBefore = (i) => ({ ...doc.look, ...(i > 0 ? styles[i - 1] : null) });
 
   const select = (sel, blockIndex) => {
     setSelection(sel);
@@ -95,8 +98,8 @@ export function VisualsView({ store, engine }) {
       onMove=${(by) => editBlock(selBlock.id, (b) => { const [v] = b.visuals.splice(vi, 1); b.visuals.splice(vi + by, 0, v); })}
       onRemove=${() => { editBlock(selBlock.id, (b) => { b.visuals.splice(vi, 1); }); setSelection({ kind: 'block', blockId: selBlock.id }); }} />`;
   } else if (selection.kind === 'block' && selBlock) {
-    panel = html`<${LookPanel} title=${`${blockLabel} look`} style=${selBlock.style} inherited=${doc.look}
-      hint="Changes here apply while this block plays. ↺ returns a setting to the song look."
+    panel = html`<${LookPanel} title=${`${blockLabel} look`} style=${selBlock.style} inherited=${lookBefore(selIndex)}
+      hint="Changes here carry on through later blocks until one changes them again. ↺ undoes a change, returning to the look from before this block."
       onChange=${(key, value) => editBlock(selBlock.id, (b) => {
         const style = { ...b.style };
         if (value === undefined) delete style[key]; else style[key] = value;
@@ -130,7 +133,7 @@ export function VisualsView({ store, engine }) {
                     <button class=${`block ${blockSelected ? 'selected' : ''}`} onClick=${() => select({ kind: 'block', blockId: block.id }, i)}
                       title="Set this block's look">
                       <span class="name">${p.name}</span>
-                      ${block.style && html`<span class="swatch" style=${`background: ${block.style.background ?? doc.look.background}; border-color: ${block.style.lineColor ?? doc.look.lineColor}`}></span>`}
+                      ${block.style && html`<span class="swatch" style=${`background: ${styles[i].background ?? doc.look.background}; border-color: ${styles[i].lineColor ?? doc.look.lineColor}`}></span>`}
                     </button>
                     <div class="viz-blocks">
                       ${block.visuals.map((v) => html`

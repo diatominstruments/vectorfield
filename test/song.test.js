@@ -1,14 +1,24 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultSong, normalizeSong, blockTimes, visualsInEffect, newBlock, newVisual, SongError } from '../shared/song.js';
+import { defaultSong, normalizeSong, blockTimes, stylesInEffect, visualsInEffect, newBlock, newVisual, SongError } from '../shared/song.js';
+import { sampleSong } from './fixtures.js';
 
-test('the default song is already normal', () => {
+test('a new song is a blank canvas', () => {
   const song = defaultSong();
+  assert.deepEqual(song.tracks, []);
+  assert.equal(song.patterns.length, 1);
+  assert.deepEqual(song.patterns[0].notes, {});
+  assert.deepEqual(song.arrangement.map((b) => b.visuals), [[]]);
+  assert.deepEqual(normalizeSong(song), song);
+});
+
+test('a filled-in song is already normal', () => {
+  const song = sampleSong();
   assert.deepEqual(normalizeSong(song), song);
 });
 
 test('params are clamped to the instrument schema', () => {
-  const song = defaultSong();
+  const song = sampleSong();
   song.tracks[1].instrument.params.cutoff = 1e9;
   song.tracks[1].instrument.params.bogus = 1;
   const clean = normalizeSong(song);
@@ -17,7 +27,7 @@ test('params are clamped to the instrument schema', () => {
 });
 
 test('dangling references are dropped', () => {
-  const song = defaultSong();
+  const song = sampleSong();
   song.patterns[0].notes.ghost = [{ step: 0, note: 60, velocity: 1, length: 1 }];
   song.arrangement.push({ id: 'nope', pattern: 'nope', visuals: [] });
   const clean = normalizeSong(song);
@@ -26,7 +36,7 @@ test('dangling references are dropped', () => {
 });
 
 test('notes are kept inside their pattern', () => {
-  const song = defaultSong();
+  const song = sampleSong();
   const [drums] = song.tracks;
   song.patterns[0].notes[drums.id] = [
     { step: 15, note: 36, velocity: 1, length: 8 },   // runs past the end
@@ -37,13 +47,13 @@ test('notes are kept inside their pattern', () => {
 
 test('structural problems throw', () => {
   assert.throws(() => normalizeSong({ tracks: 'x' }), SongError);
-  const song = defaultSong();
+  const song = sampleSong();
   song.tracks[0].id = '../etc';
   assert.throws(() => normalizeSong(song), SongError);
 });
 
 test('songs saved with bare pattern ids upgrade to blocks', () => {
-  const song = defaultSong();
+  const song = sampleSong();
   const pid = song.patterns[0].id;
   song.arrangement = [pid, pid];
   delete song.look;
@@ -55,7 +65,7 @@ test('songs saved with bare pattern ids upgrade to blocks', () => {
 });
 
 test('visuals: signal specs stay inside the closed language', () => {
-  const song = defaultSong();
+  const song = sampleSong();
   const [block] = song.arrangement;
   block.visuals[0].bind = { swell: { band: 'bass', gain: 99, smooth: 0.1 }, jolt: 'snare' };
   block.style = { background: '#FF0000', lineWidth: 50, fontFamily: 'Comic Sans' };
@@ -70,14 +80,14 @@ test('visuals: signal specs stay inside the closed language', () => {
 });
 
 test('block times follow pattern lengths and tempo', () => {
-  const song = defaultSong();
+  const song = sampleSong();
   song.arrangement.push({ ...song.arrangement[0], id: 'second' });
   song.bpm = 120;   // a 16-step bar is 2 s
   assert.deepEqual(blockTimes(song), [{ start: 0, end: 2 }, { start: 2, end: 4 }]);
 });
 
 test('blocks without visuals continue the previous visuals', () => {
-  const song = defaultSong();
+  const song = sampleSong();
   const pid = song.patterns[0].id;
   const road = newVisual('road');
   song.arrangement = [newBlock(pid), newBlock(pid, [road]), newBlock(pid), newBlock(pid), newBlock(pid, [newVisual('tunnel')])];
@@ -87,8 +97,24 @@ test('blocks without visuals continue the previous visuals', () => {
   assert.deepEqual(inEffect[0].visuals, []);
 });
 
+test('block style changes carry on until a later block changes them', () => {
+  const song = sampleSong();
+  const pid = song.patterns[0].id;
+  song.arrangement = [newBlock(pid), newBlock(pid), newBlock(pid), newBlock(pid), newBlock(pid)];
+  song.arrangement[1].style = { lineColor: '#ff0000', background: '#000000' };
+  song.arrangement[3].style = { lineColor: '#00ff00' };
+  assert.deepEqual(stylesInEffect(song), [
+    null,
+    { lineColor: '#ff0000', background: '#000000' },
+    { lineColor: '#ff0000', background: '#000000' },
+    { lineColor: '#00ff00', background: '#000000' },   // only the line colour changes
+    { lineColor: '#00ff00', background: '#000000' },
+  ]);
+  assert.equal(song.arrangement[1].style.lineColor, '#ff0000');   // blocks' own changes untouched
+});
+
 test('main mix effects are validated like track effects', () => {
-  const song = defaultSong();
+  const song = sampleSong();
   song.mix.effects = [{ id: 'delay', params: { mix: 5 } }];
   const clean = normalizeSong(song);
   assert.equal(clean.mix.effects[0].id, 'delay');
@@ -98,7 +124,7 @@ test('main mix effects are validated like track effects', () => {
 });
 
 test('songs saved before the main mix get an empty one', () => {
-  const song = defaultSong();
+  const song = sampleSong();
   delete song.mix;
   assert.deepEqual(normalizeSong(song).mix, { effects: [] });
 });

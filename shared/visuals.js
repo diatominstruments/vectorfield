@@ -6,7 +6,8 @@
  *          lineWidth, shadowBlur }
  *   each arrangement block may carry
  *     visuals: [{ id, viz, bind, options }]   kit timeline entries
- *     style:   partial look, overriding the song's for that block
+ *     style:   partial look, overriding the song's from that block on,
+ *              until a later block changes the same setting
  *
  * `bind` maps a visualization's input slots to signal specs, in the kit's
  * own closed spec language (see gloaming-kit src/signals.js). Visualization

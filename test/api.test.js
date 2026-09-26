@@ -43,7 +43,7 @@ test('create, list, load, save, delete', async () => {
   const created = await api('/songs', { method: 'POST', body: { title: 'First' } });
   assert.equal(created.status, 201);
   const { id, revision, doc } = created.body.song;
-  assert.equal(doc.tracks.length, 3);
+  assert.deepEqual(doc.tracks, []);   // a blank canvas
 
   assert.deepEqual((await api('/songs')).body.songs.map((s) => s.title), ['First']);
 
@@ -82,7 +82,7 @@ test('malformed songs are refused', async () => {
   const api = await signIn('Ada');
   const { id, revision, doc } = (await api('/songs', { method: 'POST', body: {} })).body.song;
   const bad = structuredClone(doc);
-  bad.tracks[0].instrument.id = 'not-a-synth';
+  bad.tracks.push({ id: 'abc', name: 'X', gain: 1, mute: false, instrument: { id: 'not-a-synth', params: {} }, effects: [] });
   const res = await api(`/songs/${id}`, { method: 'PUT', body: { revision, doc: bad } });
   assert.equal(res.status, 400);
   assert.match(res.body.error, /unknown instrument/);
@@ -148,7 +148,7 @@ test('publishing makes a song public; unpublishing hides it again', async () => 
   assert.equal(shown.status, 200);
   assert.equal(shown.body.song.title, 'Public one');
   assert.equal(shown.body.song.owner.username, 'ada');
-  assert.equal(shown.body.song.doc.tracks.length, 3);
+  assert.equal(shown.body.song.doc.patterns.length, 1);
   assert.equal('email' in shown.body.song.owner, false);
 
   // Tags can change without touching the published state or date.
