@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { html, Link, navigate, useSubscription, useEngineEvent } from '../lib.js';
+import { html, Link, navigate, useSubscription, useEngineEvent, useTitle } from '../lib.js';
 import { api } from '../api.js';
 import { Engine } from '../engine.js';
 import { SongStore } from '../store.js';
@@ -7,11 +7,15 @@ import { LIMITS } from '../../shared/song.js';
 import { InstrumentsView } from './instruments.js';
 import { PatternsView } from './patterns.js';
 import { SongView } from './song-view.js';
+import { VisualsView } from './visuals.js';
+import { PublishView } from './publish.js';
 
 const VIEWS = [
   ['instruments', 'Instruments'],
   ['patterns', 'Patterns'],
   ['song', 'Song'],
+  ['visuals', 'Visuals'],
+  ['publish', 'Publish'],
 ];
 
 const STATUS = {
@@ -38,6 +42,7 @@ export function Editor({ songId, view }) {
   }, [songId]);
 
   useSubscription(store);
+  useTitle(store?.title ?? null);
   const playing = useEngineEvent(engine, 'state', false);
   const togglePlayRef = useRef(null);
   useSpaceToPlay(togglePlayRef);
@@ -56,7 +61,7 @@ export function Editor({ songId, view }) {
     };
   }, [store]);
 
-  if (error) return html`<main class="editor"><p class="error">${error}</p><${Link} href="/">Back to songs</${Link}></main>`;
+  if (error) return html`<main class="editor"><p class="error">${error}</p><${Link} href="/studio">Back to the studio</${Link}></main>`;
   if (!store) return html`<div class="loading">Loading song…</div>`;
 
   const doc = store.doc;
@@ -75,7 +80,7 @@ export function Editor({ songId, view }) {
   return html`
     <main class="editor">
       <div class="toolbar">
-        <${Link} href="/" class="ghost">← Songs</${Link}>
+        <${Link} href="/studio" class="ghost">← Studio</${Link}>
         <input class="title" value=${store.title} maxlength=${LIMITS.nameLength} aria-label="Song title"
           onInput=${(e) => store.setTitle(e.target.value)} />
         <span class=${`status ${store.status}`}>${STATUS[store.status]}</span>
@@ -101,11 +106,14 @@ export function Editor({ songId, view }) {
         pattern=${pattern} onSelect=${setPatternId} />`}
       ${view === 'song' && html`<${SongView} store=${store} engine=${engine}
         onEditPattern=${(id) => { setPatternId(id); navigate(`/songs/${songId}/patterns`); }} />`}
+      ${view === 'visuals' && html`<${VisualsView} store=${store} engine=${engine} />`}
+      ${view === 'publish' && html`<${PublishView} store=${store} />`}
     </main>
   `;
 }
 
-function useSpaceToPlay(toggleRef) {
+/** Space plays and stops, unless a control has focus. */
+export function useSpaceToPlay(toggleRef) {
   useEffect(() => {
     const onKey = (e) => {
       if (e.code !== 'Space' || e.repeat) return;

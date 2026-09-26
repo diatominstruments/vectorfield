@@ -14,7 +14,7 @@ function loadGoogle() {
   });
 }
 
-export function SignIn({ config, onSignedIn }) {
+export function SignIn({ config, onSignedIn, next }) {
   const buttonRef = useRef();
   const [error, setError] = useState(null);
   const [devName, setDevName] = useState('');
@@ -38,12 +38,13 @@ export function SignIn({ config, onSignedIn }) {
 
   return html`
     <main class="sign-in">
-      <h1 class="brand">vision<span>·</span>land</h1>
+      <h1 class="brand">Vector<span>field</span></h1>
       <p class="tagline">Make a song. Make it move.</p>
+      ${next && next !== '/' && html`<p class="muted">Sign in to continue.</p>`}
       ${config.googleClientId && html`<div ref=${buttonRef} class="google-button"></div>`}
       ${config.devLogin && html`
         <form class="dev-login" onSubmit=${devSignIn}>
-          <input placeholder="Dev user name" value=${devName} onInput=${(e) => setDevName(e.target.value)} />
+          <input placeholder="Dev user name (blank: pick one after)" value=${devName} onInput=${(e) => setDevName(e.target.value)} />
           <button>Dev sign-in</button>
         </form>`}
       ${!config.googleClientId && !config.devLogin && html`

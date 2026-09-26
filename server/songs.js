@@ -1,23 +1,32 @@
 import { Router } from 'express';
 import { defaultSong, normalizeSong, SongError, LIMITS } from '../shared/song.js';
-import { requireUser } from './auth.js';
+import { TAG_LIMITS, normalizeTags } from '../shared/genres.js';
+import { requireProfile } from './auth.js';
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const DESCRIPTION_LENGTH = 500;
 
 function title(x) {
   const t = typeof x === 'string' ? x.trim().slice(0, LIMITS.nameLength) : '';
   return t || 'Untitled song';
 }
 
-const summary = (r) => ({ id: r.id, title: r.title, revision: r.revision, updatedAt: r.updated_at });
+const description = (x) => (typeof x === 'string' ? x.trim().slice(0, DESCRIPTION_LENGTH) : '');
+
+/** A song as lists show it: everything but the document. */
+export const summary = (r) => ({
+  id: r.id, title: r.title, revision: r.revision, updatedAt: r.updated_at,
+  description: r.description ?? '', tags: r.tags ?? [], publishedAt: r.published_at ?? null,
+});
 
 /**
- * Songs are private to their owner for now; sharing comes with the social
- * side. Every query is scoped by owner_id, so a guessed id finds nothing.
+ * The owner's side of songs: create, edit, publish, delete. Every query is
+ * scoped by owner_id, so a guessed id finds nothing. Reading a published
+ * song is public.js's job.
  */
 export function songsRouter(db) {
   const router = Router();
-  router.use(requireUser);
+  router.use(requireProfile);
 
   router.param('id', (req, res, next, id) => {
     if (!UUID.test(id)) return res.status(404).json({ error: 'Song not found' });
@@ -26,7 +35,8 @@ export function songsRouter(db) {
 
   router.get('/', async (req, res) => {
     const { rows } = await db.query(
-      'select id, title, revision, updated_at from songs where owner_id = $1 order by updated_at desc',
+      `select id, title, revision, updated_at, description, tags, published_at
+       from songs where owner_id = $1 order by updated_at desc`,
       [req.user.id],
     );
     res.json({ songs: rows.map(summary) });
@@ -64,7 +74,7 @@ export function songsRouter(db) {
     const { rows } = await db.query(
       `update songs set title = $1, doc = $2, revision = revision + 1, updated_at = now()
        where id = $3 and owner_id = $4 and revision = $5
-       returning id, title, revision, updated_at`,
+       returning id, title, revision, updated_at, description, tags, published_at`,
       [title(req.body.title), JSON.stringify(doc), req.params.id, req.user.id, revision],
     );
     if (rows[0]) return res.json({ song: summary(rows[0]) });
@@ -72,6 +82,33 @@ export function songsRouter(db) {
     const exists = await db.query('select revision from songs where id = $1 and owner_id = $2', [req.params.id, req.user.id]);
     if (!exists.rows[0]) return res.status(404).json({ error: 'Song not found' });
     res.status(409).json({ error: 'This song was changed somewhere else', revision: exists.rows[0].revision });
+  });
+
+  // Publishing is separate from saving: it's a deliberate act, not an
+  // autosave, and it doesn't touch the document or its revision. The same
+  // call updates tags and description whether or not the song is public;
+  // `published` flips it, and the original publish date is kept.
+  router.put('/:id/publish', async (req, res) => {
+    const body = req.body ?? {};
+    const { rows } = await db.query(
+      `update songs set
+         tags = coalesce($3::jsonb, tags),
+         description = coalesce($4, description),
+         published_at = case
+           when $5::boolean is null then published_at
+           when $5 then coalesce(published_at, now())
+           else null end
+       where id = $1 and owner_id = $2
+       returning id, title, revision, updated_at, description, tags, published_at`,
+      [
+        req.params.id, req.user.id,
+        'tags' in body ? JSON.stringify(normalizeTags(body.tags, TAG_LIMITS.perSong)) : null,
+        'description' in body ? description(body.description) : null,
+        typeof body.published === 'boolean' ? body.published : null,
+      ],
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Song not found' });
+    res.json({ song: summary(rows[0]) });
   });
 
   router.delete('/:id', async (req, res) => {

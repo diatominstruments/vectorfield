@@ -1,4 +1,6 @@
 import { create, chain } from 'gloaming-instruments';
+import { blockTimes, sequencerOf } from '../shared/song.js';
+import { BounceSim } from './bounce-sim.js';
 
 const LOOKAHEAD = 0.12;   // seconds of audio scheduled ahead of the clock
 const TICK_MS = 25;
@@ -6,7 +8,8 @@ const STEPS_PER_BEAT = 4;
 
 /**
  * Engine — turns a song document into sound. Owns the AudioContext, one
- * live instrument → effects → gain chain per track, and a lookahead
+ * live instrument → effects → gain chain per track, the main mix's effects
+ * after them (master → mix effects → limiter), and a lookahead
  * scheduler that plays either one pattern on loop or the arrangement.
  *
  * The song document stays the source of truth: after any edit, sync(song)
@@ -21,6 +24,7 @@ export class Engine {
     this.ctx = null;
     this.song = null;
     this.live = new Map();   // track id -> { instrument, effects, gain, key }
+    this.mix = { effects: [], key: '' };   // the main mix's live effects
     this.listeners = new Map();
     this.playing = false;
     this.position = null;
@@ -36,10 +40,11 @@ export class Engine {
     this.listeners.get(event)?.forEach((fn) => fn(data));
   }
 
-  // The context is created on first use, from a click, so autoplay rules
-  // let it start.
-  #ensureContext() {
-    if (this.ctx) return;
+  // Created on first use. Normally that's a click, so autoplay rules let
+  // it start; a context made earlier (the visuals page, which needs one to
+  // attach to) starts suspended and is resumed by play().
+  ensureContext() {
+    if (this.ctx) return this.ctx;
     this.ctx = new AudioContext({ latencyHint: 'interactive' });
     this.master = new GainNode(this.ctx, { gain: 0.9 });
     // A brick-wall-ish limiter: many tracks at full gain would clip, and
@@ -47,8 +52,14 @@ export class Engine {
     const limiter = new DynamicsCompressorNode(this.ctx, {
       threshold: -3, knee: 0, ratio: 20, attack: 0.002, release: 0.1,
     });
+    // Mix effects go between master and limiter (see #rewireMix), so the
+    // limiter always has the last word.
+    this.limiter = limiter;
     this.master.connect(limiter).connect(this.ctx.destination);
+    /** Everything the song plays, post-limiter — for analysis. */
+    this.output = limiter;
     if (this.song) this.sync(this.song);
+    return this.ctx;
   }
 
   // ---- graph -------------------------------------------------------------------
@@ -79,6 +90,17 @@ export class Engine {
       }
       live.gain.gain.setTargetAtTime(track.mute ? 0 : track.gain, this.ctx.currentTime, 0.01);
     }
+
+    if (effectsKey(song.mix) !== this.mix.key) this.#rewireMix(song.mix);
+    song.mix.effects.forEach((e, i) => updateParams(this.mix.effects[i], e.params));
+  }
+
+  #rewireMix(mix) {
+    this.master.disconnect();
+    this.mix.effects.forEach((e) => e.dispose());
+    this.mix.effects = mix.effects.map((e) => create(this.ctx, e));
+    chain(this.master, ...this.mix.effects, this.limiter);
+    this.mix.key = effectsKey(mix);
   }
 
   #build(track) {
@@ -109,15 +131,17 @@ export class Engine {
 
   /** Play one pattern on loop ({ patternId }) or the arrangement ({ index }). */
   async play(from) {
-    this.#ensureContext();
+    this.ensureContext();
     this.stop();
     await this.ctx.resume();
 
     this.cursor = from.patternId
       ? { mode: 'pattern', patternId: from.patternId, index: 0, step: 0 }
       : { mode: 'song', patternId: null, index: from.index ?? 0, step: 0 };
+    this.startIndex = this.cursor.index;
     this.nextTime = this.ctx.currentTime + 0.05;
-    this.pendingOffs = [];   // { time, instrument, note }, kept in time order
+    this.queue = [];         // note events waiting for their time; see #enqueue
+    this.sims = new Map();   // pattern + track → { sim, trace, hits }; fresh balls every play
     this.heard = [];         // positions waiting for the clock to reach them
     this.playing = true;
     this.timer = setInterval(() => this.#tick(), TICK_MS);
@@ -141,7 +165,7 @@ export class Engine {
 
   #pattern() {
     const { song, cursor } = this;
-    const id = cursor.mode === 'pattern' ? cursor.patternId : song.arrangement[cursor.index];
+    const id = cursor.mode === 'pattern' ? cursor.patternId : song.arrangement[cursor.index]?.pattern;
     return song.patterns.find((p) => p.id === id) ?? null;
   }
 
@@ -158,19 +182,11 @@ export class Engine {
 
       const t = this.nextTime;
       const stepLength = 60 / this.song.bpm / STEPS_PER_BEAT;
-      // Note-offs that fall due go first, so instruments see every event in
-      // time order: a note ending where the next begins is a retrigger, not
-      // an overlap (which a mono synth would play as a slide).
-      this.#flushOffs(t);
       for (const track of this.song.tracks) {
-        const live = this.live.get(track.id);
-        if (!live || track.mute) continue;
-        for (const n of pattern.notes[track.id] ?? []) {
-          if (n.step !== this.cursor.step) continue;
-          live.instrument.noteOn(n.note, n.velocity, t);
-          this.#queueOff(t + n.length * stepLength, live.instrument, n.note);
-        }
+        if (sequencerOf(pattern, track.id) === 'bounce') this.#bounceStep(pattern, track, t, stepLength);
+        else this.#gridStep(pattern, track, t, stepLength);
       }
+      this.#flush(t + stepLength);
       this.heard.push({ time: t, patternId: pattern.id, index: this.cursor.index, step: this.cursor.step });
 
       this.nextTime += stepLength;
@@ -184,27 +200,95 @@ export class Engine {
     if (this.cursor.mode === 'song') this.cursor.index++;
   }
 
-  #queueOff(time, instrument, note) {
-    const offs = this.pendingOffs;
-    let i = offs.length;
-    while (i > 0 && offs[i - 1].time > time) i--;
-    offs.splice(i, 0, { time, instrument, note });
-  }
-
-  #flushOffs(upTo) {
-    while (this.pendingOffs.length && this.pendingOffs[0].time <= upTo) {
-      const { time, instrument, note } = this.pendingOffs.shift();
-      instrument.noteOff(note, time);
+  // Step grid: the track's notes that start on this step.
+  #gridStep(pattern, track, t, stepLength) {
+    const live = this.live.get(track.id);
+    if (!live || track.mute) return;
+    for (const n of pattern.notes[track.id] ?? []) {
+      if (n.step === this.cursor.step) this.#queueOn(t, live.instrument, n.note, n.velocity, n.length * stepLength);
     }
   }
 
-  // The end of the arrangement: release everything as the last step ends,
-  // then stop once that moment has actually been heard.
+  // Bouncing balls: run the track's balls through this step and play each
+  // wall hit at the moment it happens (or on the next grid line, when
+  // quantized). The balls live for the whole playback, so they carry on
+  // from where they were the next time the pattern comes round.
+  #bounceStep(pattern, track, t, stepLength) {
+    const config = pattern.bounce[track.id];
+    const key = simKey(pattern.id, track.id);
+    let entry = this.sims.get(key);
+    if (!entry) {
+      entry = { sim: new BounceSim(config), trace: [], hits: [] };
+      this.sims.set(key, entry);
+    }
+    entry.sim.sync(config);
+
+    const beat = stepLength * STEPS_PER_BEAT;
+    if (!entry.trace.length) entry.trace.push({ time: t, balls: snapshot([...entry.sim.balls.values()]) });
+    const hits = entry.sim.advance(1 / STEPS_PER_BEAT, (at, balls) => {
+      entry.trace.push({ time: t + at * beat, balls: snapshot(balls) });
+    });
+    // Keep a couple of seconds of history for the editor to draw from.
+    const keepFrom = this.ctx.currentTime - 2;
+    while (entry.trace.length > 2 && entry.trace[1].time < keepFrom) entry.trace.shift();
+    while (entry.hits.length && entry.hits[0].time < keepFrom) entry.hits.shift();
+
+    // A muted track's balls keep moving; they just don't sound.
+    const live = track.mute ? null : this.live.get(track.id);
+    for (const hit of hits) {
+      let time = t + hit.at * beat;
+      if (config.quantize) {
+        const step = this.cursor.step + hit.at * STEPS_PER_BEAT;
+        const snapped = Math.ceil(step / config.quantize - 1e-9) * config.quantize;
+        time = t + (snapped - this.cursor.step) * stepLength;
+      }
+      entry.hits.push({ time, segment: hit.segment });
+      if (live) this.#queueOn(time, live.instrument, config.walls[hit.segment], 0.45 + 0.55 * hit.strength, config.gate * stepLength);
+    }
+  }
+
+  // Every note-on and note-off goes through one queue in time order, and
+  // offs sort before ons at the same instant: instruments must see events in
+  // order, and a note ending where the next begins is a retrigger, not an
+  // overlap (which a mono synth would play as a slide).
+  #queueOn(time, instrument, note, velocity, length) {
+    this.#enqueue({ time, on: true, instrument, note, velocity, length });
+  }
+
+  #enqueue(event) {
+    const q = this.queue;
+    const rank = (e) => e.time + (e.on ? 1e-9 : 0);
+    let i = q.length;
+    while (i > 0 && rank(q[i - 1]) > rank(event)) i--;
+    q.splice(i, 0, event);
+  }
+
+  /** Send every queued event before `end` to its instrument. */
+  #flush(end) {
+    while (this.queue.length && this.queue[0].time < end) {
+      const e = this.queue.shift();
+      if (e.on) {
+        e.instrument.noteOn(e.note, e.velocity, e.time);
+        this.#enqueue({ time: e.time + e.length, on: false, instrument: e.instrument, note: e.note });
+      } else {
+        e.instrument.noteOff(e.note, e.time);
+      }
+    }
+  }
+
+  // The end of the arrangement: release everything still held (dropping any
+  // hits snapped past the end), then stop once that moment has been heard.
   #finish() {
     clearInterval(this.timer);
-    this.#flushOffs(Infinity);
+    this.queue = this.queue.filter((e) => !e.on);
+    this.#flush(Infinity);
     const wait = Math.max(0, this.nextTime - this.ctx.currentTime);
     this.finishTimer = setTimeout(() => this.stop(), wait * 1000);
+  }
+
+  /** What a track's balls in a pattern have been doing, for drawing; null unless playing. */
+  bounceTrace(patternId, trackId) {
+    return this.playing ? this.sims?.get(simKey(patternId, trackId)) ?? null : null;
   }
 
   // The scheduler runs ahead of the speakers; the UI should follow what's
@@ -224,9 +308,24 @@ export class Engine {
     this.raf = requestAnimationFrame(frame);
   }
 
+  /**
+   * Seconds into the song that are audible right now, while the arrangement
+   * plays; null otherwise. Interpolated from the last step heard, so it
+   * moves smoothly between steps.
+   */
+  get songTime() {
+    if (!this.playing || this.cursor.mode !== 'song') return null;
+    const times = blockTimes(this.song);
+    const pos = this.position;
+    if (!pos) return times[this.startIndex]?.start ?? 0;
+    const stepLength = 60 / this.song.bpm / STEPS_PER_BEAT;
+    const since = Math.min(stepLength, Math.max(0, this.ctx.currentTime - pos.time));
+    return (times[pos.index]?.start ?? 0) + pos.step * stepLength + since;
+  }
+
   /** Play one note now, for trying sounds while editing. */
   async audition(trackId, note, velocity = 0.9) {
-    this.#ensureContext();
+    this.ensureContext();
     await this.ctx.resume();
     const live = this.live.get(trackId);
     if (!live) return;
@@ -241,13 +340,18 @@ export class Engine {
     this.ctx?.close();
     this.ctx = null;
     this.live.clear();
+    this.mix = { effects: [], key: '' };
   }
 }
 
-const effectsKey = (track) => track.effects.map((e) => e.id).join(',');
+/** A chain's module ids, to tell a param change from a change of modules. */
+const effectsKey = (holder) => holder.effects.map((e) => e.id).join(',');
 
 function updateParams(module, params) {
   for (const [name, value] of Object.entries(params)) {
     if (module.params[name] !== value) module.setParam(name, value);
   }
 }
+
+const simKey = (patternId, trackId) => `${patternId}:${trackId}`;
+const snapshot = (balls) => balls.map(({ id, x, y }) => ({ id, x, y }));

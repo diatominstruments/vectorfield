@@ -1,5 +1,5 @@
 {
-  "name": "vision-land",
+  "name": "vectorfield",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -15,6 +15,7 @@
   "dependencies": {
     "express": "^5.2.1",
     "gloaming-instruments": "file:../Documents/gloaming-instruments",
+    "gloaming-kit": "file:../Documents/musicviz",
     "google-auth-library": "^11.1.0",
     "htm": "^3.1.1",
     "pg": "^8.23.0",

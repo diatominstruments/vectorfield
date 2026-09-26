@@ -2,6 +2,8 @@ import { createHash, randomBytes } from 'node:crypto';
 import { Router } from 'express';
 import { OAuth2Client } from 'google-auth-library';
 import { config } from './config.js';
+import { TAG_LIMITS, normalizeTags } from '../shared/genres.js';
+import { usernameProblem, suggestUsername, cleanBio } from '../shared/users.js';
 
 const COOKIE = 'sid';
 const hash = (token) => createHash('sha256').update(token).digest('hex');
@@ -23,12 +25,29 @@ function setCookie(res, value, maxAgeSeconds) {
   res.setHeader('Set-Cookie', attrs.join('; '));
 }
 
-const publicUser = (u) => ({ id: String(u.id), name: u.name, email: u.email, avatarUrl: u.avatar_url });
+/** What anyone may see of a user. `username` is null until they've chosen one. */
+export const publicUser = (u) => ({
+  id: String(u.id), username: u.username, avatarUrl: u.avatar_url, bio: u.bio ?? '', interests: u.interests ?? [],
+});
+/** What the user sees of themselves. */
+const selfUser = (u) => ({ ...publicUser(u), email: u.email });
+
+/** A username nobody has yet, from some text: ada, ada2, ada3, … (dev sign-in only). */
+async function freeUsername(db, text) {
+  const base = suggestUsername(text);
+  for (let n = 1; ; n++) {
+    const candidate = n === 1 ? base : `${base.slice(0, 24 - String(n).length)}${n}`;
+    const { rows } = await db.query('select 1 from users where username = $1', [candidate]);
+    if (!rows.length) return candidate;
+  }
+}
 
 /**
  * Sign-in flow: the browser runs Google Identity Services, which hands it a
  * signed ID token; we verify that token's signature and audience here, then
- * issue our own session cookie. Google is only involved at sign-in.
+ * issue our own session cookie. Google is only involved at sign-in, and
+ * only the account id, verified email and avatar are kept — never the
+ * name. A new account has no username until its owner picks one.
  */
 export function authRouter(db) {
   const router = Router();
@@ -43,16 +62,15 @@ export function authRouter(db) {
       [hash(token), user.id, days],
     );
     setCookie(res, token, days * 86400);
-    res.json({ user: publicUser(user) });
+    res.json({ user: selfUser(user) });
   }
 
-  async function upsertUser({ sub, email, name, picture }) {
+  async function upsertUser({ sub, email, picture, username = null }) {
     const { rows } = await db.query(
-      `insert into users (google_sub, email, name, avatar_url) values ($1, $2, $3, $4)
-       on conflict (google_sub) do update
-         set email = excluded.email, name = excluded.name, avatar_url = excluded.avatar_url
+      `insert into users (google_sub, email, avatar_url, username) values ($1, $2, $3, $4)
+       on conflict (google_sub) do update set email = excluded.email, avatar_url = excluded.avatar_url
        returning *`,
-      [sub, email ?? null, name, picture ?? null],
+      [sub, email ?? null, picture ?? null, username],
     );
     return rows[0];
   }
@@ -69,16 +87,22 @@ export function authRouter(db) {
     const user = await upsertUser({
       sub: payload.sub,
       email: payload.email_verified ? payload.email : null,
-      name: payload.name ?? payload.email ?? 'Anonymous',
       picture: payload.picture,
     });
     await startSession(res, user);
   });
 
   if (config.devLogin) {
+    // The dev sign-in names its user up front, so local work skips the
+    // username step: the typed name becomes the username. Left blank, it
+    // makes a fresh nameless account each time, to walk the same path a
+    // Google sign-in takes.
     router.post('/dev', async (req, res) => {
-      const name = String(req.body?.name ?? '').trim().slice(0, 60) || 'Dev User';
-      const user = await upsertUser({ sub: `dev:${name.toLowerCase()}`, name });
+      const name = String(req.body?.name ?? '').trim().slice(0, 60);
+      const sub = name ? `dev:${name.toLowerCase()}` : `dev:anon:${randomBytes(6).toString('hex')}`;
+      const existing = await db.query('select 1 from users where google_sub = $1', [sub]);
+      const username = name && !existing.rows.length ? await freeUsername(db, name) : null;
+      const user = await upsertUser({ sub, username });
       await startSession(res, user);
     });
   }
@@ -91,7 +115,35 @@ export function authRouter(db) {
   });
 
   router.get('/me', (req, res) => {
-    res.json({ user: req.user ? publicUser(req.user) : null });
+    res.json({ user: req.user ? selfUser(req.user) : null });
+  });
+
+  // Profile edits, including the first choice of username. Only the fields
+  // sent change; a username must be free.
+  router.put('/me', requireUser, async (req, res) => {
+    const body = req.body ?? {};
+    const user = req.user;
+    const bio = 'bio' in body ? cleanBio(body.bio) : user.bio;
+    const interests = 'interests' in body ? normalizeTags(body.interests, TAG_LIMITS.interests) : user.interests;
+    let username = user.username;
+    if ('username' in body) {
+      username = String(body.username ?? '').trim().toLowerCase();
+      const problem = usernameProblem(username);
+      if (problem) return res.status(400).json({ error: problem });
+      const taken = await db.query('select 1 from users where username = $1 and id <> $2', [username, user.id]);
+      if (taken.rows.length) return res.status(409).json({ error: 'That username is taken' });
+    }
+    try {
+      const { rows } = await db.query(
+        'update users set bio = $2, interests = $3, username = $4 where id = $1 returning *',
+        [user.id, bio, JSON.stringify(interests), username],
+      );
+      res.json({ user: selfUser(rows[0]) });
+    } catch (err) {
+      // Two people claiming one username at the same instant: the unique index decides.
+      if (/unique|duplicate/i.test(err.message)) return res.status(409).json({ error: 'That username is taken' });
+      throw err;
+    }
   });
 
   return router;
@@ -115,5 +167,15 @@ export function sessionMiddleware(db) {
 
 export function requireUser(req, res, next) {
   if (!req.user) return res.status(401).json({ error: 'Sign in required' });
+  next();
+}
+
+/**
+ * Signed in and named. Songs need this: anything they lead to publicly
+ * points at the owner's profile, which doesn't exist without a username.
+ */
+export function requireProfile(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Sign in required' });
+  if (!req.user.username) return res.status(403).json({ error: 'Choose a username first' });
   next();
 }

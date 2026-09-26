@@ -1,14 +1,32 @@
 import { useRef, useState } from 'preact/hooks';
 import { registry } from 'gloaming-instruments';
 import { html, hue, noteName, isBlackKey, useEngineEvent } from '../lib.js';
-import { LIMITS, PATTERN_LENGTHS, newPattern, newId } from '../../shared/song.js';
+import { LIMITS, PATTERN_LENGTHS, newPattern, newId, sequencerOf } from '../../shared/song.js';
+import { defaultBounce } from '../../shared/bounce.js';
+import { plural } from './song-view.js';
+import { BounceEditor } from './bounce-editor.js';
 
 const VISIBLE_OCTAVES = 2;
 
 export function PatternsView({ store, engine, pattern, onSelect }) {
   const { doc } = store;
   const [trackId, setTrackId] = useState(doc.tracks[0]?.id);
+  const [newLength, setNewLength] = useState(1);
   const track = doc.tracks.find((t) => t.id === trackId) ?? doc.tracks[0];
+  const pitched = track && !registry.get(track.instrument.id).keys;
+  const bouncing = track && pattern && sequencerOf(pattern, track.id) === 'bounce';
+
+  // A track keeps its notes and its bounce settings whichever sequencer it
+  // uses, so switching back and forth loses nothing.
+  const setSequencer = (kind) => store.edit((d) => {
+    const p = d.patterns.find((x) => x.id === pattern.id);
+    if (kind === 'bounce') {
+      p.sequencers[track.id] = 'bounce';
+      p.bounce[track.id] ??= defaultBounce(registry.get(track.instrument.id).keys);
+    } else {
+      delete p.sequencers[track.id];
+    }
+  });
 
   const addPattern = () => {
     const p = newPattern(`Pattern ${doc.patterns.length + 1}`, pattern?.length ?? 16);
@@ -29,7 +47,9 @@ export function PatternsView({ store, engine, pattern, onSelect }) {
         <ul>
           ${doc.patterns.map((p, i) => html`
             <li key=${p.id} class=${p.id === pattern.id ? 'active' : ''} style=${`--hue: ${hue(i)}`}>
-              <button class="ghost" onClick=${() => onSelect(p.id)}>${p.name}</button>
+              <button class="ghost" onClick=${() => onSelect(p.id)}>
+                ${Object.keys(p.sequencers).length > 0 && html`<span class="kind-dot" title="Has bouncing-ball tracks">●</span>`}${p.name}
+              </button>
             </li>`)}
         </ul>
         <button class="ghost" disabled=${doc.patterns.length >= LIMITS.patterns} onClick=${addPattern}>+ New pattern</button>
@@ -41,14 +61,37 @@ export function PatternsView({ store, engine, pattern, onSelect }) {
           ? html`<p class="muted">Add a track in the Instruments view first.</p>`
           : html`
             <nav class="track-tabs">
-              ${doc.tracks.map((t, i) => html`
-                <button key=${t.id} class=${t.id === track.id ? 'active' : ''} style=${`--hue: ${hue(i)}`}
-                  onClick=${() => setTrackId(t.id)}>
-                  ${t.name} <small>${pattern.notes[t.id]?.length || ''}</small>
-                </button>`)}
+              ${doc.tracks.map((t, i) => {
+                const bounces = sequencerOf(pattern, t.id) === 'bounce';
+                return html`
+                  <button key=${t.id} class=${t.id === track.id ? 'active' : ''} style=${`--hue: ${hue(i)}`}
+                    onClick=${() => setTrackId(t.id)}>
+                    ${bounces && html`<span class="kind-dot" title="Bouncing balls">●</span>`}${t.name}
+                    <small>${bounces ? `${pattern.bounce[t.id].balls.length} balls` : pattern.notes[t.id]?.length || ''}</small>
+                  </button>`;
+              })}
             </nav>
+            <label class="sequencer-choice">
+              <span class="muted">${track.name} sequencer</span>
+              <select value=${bouncing ? 'bounce' : 'steps'} onChange=${(e) => setSequencer(e.target.value)}>
+                <option value="steps">Steps</option>
+                <option value="bounce">Bouncing balls</option>
+              </select>
+            </label>
+            ${bouncing
+              ? html`<${BounceEditor} key=${`${pattern.id}:${track.id}`} store=${store} engine=${engine} pattern=${pattern} track=${track}
+                  trackIndex=${doc.tracks.indexOf(track)} />`
+              : html`
+            ${pitched && html`
+              <div class="note-length" role="radiogroup" aria-label="Length of new notes">
+                <span class="muted">New notes</span>
+                ${NOTE_LENGTHS.map(([steps, label]) => html`
+                  <button key=${steps} role="radio" aria-checked=${newLength === steps}
+                    class=${newLength === steps ? 'active' : ''} onClick=${() => setNewLength(steps)}
+                    title=${`${plural(steps, 'step')}`}>${label}</button>`)}
+              </div>`}
             <${StepGrid} key=${`${pattern.id}:${track.id}`} store=${store} engine=${engine} pattern=${pattern} track=${track}
-              trackIndex=${doc.tracks.indexOf(track)} />`}
+              trackIndex=${doc.tracks.indexOf(track)} newLength=${newLength} />`}`}
       </div>
     </section>
   `;
@@ -65,13 +108,13 @@ function PatternHeader({ store, pattern, onSelect }) {
   };
 
   const remove = () => {
-    const uses = doc.arrangement.filter((id) => id === pattern.id).length;
-    const msg = uses ? `Delete "${pattern.name}"? It's used ${uses}× in the song, and those will go too.` : `Delete "${pattern.name}"?`;
+    const uses = doc.arrangement.filter((b) => b.pattern === pattern.id).length;
+    const msg = uses ? `Delete "${pattern.name}"? It's used ${uses}× in the song, and those blocks (with their visuals) will go too.` : `Delete "${pattern.name}"?`;
     if (!confirm(msg)) return;
     const next = doc.patterns.find((p) => p.id !== pattern.id);
     store.edit((d) => {
       d.patterns = d.patterns.filter((p) => p.id !== pattern.id);
-      d.arrangement = d.arrangement.filter((id) => id !== pattern.id);
+      d.arrangement = d.arrangement.filter((b) => b.pattern !== pattern.id);
     });
     onSelect(next?.id ?? null);
   };
@@ -88,9 +131,9 @@ function PatternHeader({ store, pattern, onSelect }) {
     <div class="pattern-header">
       <input class="name" value=${pattern.name} maxlength=${LIMITS.nameLength} aria-label="Pattern name"
         onInput=${(e) => edit((p) => { p.name = e.target.value; })} />
-      <label>Steps
+      <label>Length
         <select value=${pattern.length} onChange=${(e) => setLength(Number(e.target.value))}>
-          ${PATTERN_LENGTHS.map((n) => html`<option value=${n}>${n}</option>`)}
+          ${PATTERN_LENGTHS.map((n) => html`<option value=${n}>${plural(n / 16, 'bar')}</option>`)}
         </select>
       </label>
       <button class="ghost" disabled=${doc.patterns.length >= LIMITS.patterns} onClick=${duplicate}>Duplicate</button>
@@ -99,13 +142,21 @@ function PatternHeader({ store, pattern, onSelect }) {
   `;
 }
 
+/** Lengths offered for new notes, in steps (sixteenths). */
+const NOTE_LENGTHS = [[1, '1/16'], [2, '1/8'], [4, '1/4'], [8, '1/2'], [16, '1 bar']];
+
 /**
  * The step sequencer. Drum-style instruments (those naming their `keys`)
- * get one row per sound; pitched ones get a two-octave piano roll that can
- * be shifted up and down. Click a cell to add a note, drag right to lengthen
- * it (pitched only), click a note to remove it; shift-click adds an accent.
+ * get one row per sound, and every hit is a one-shot. Pitched instruments
+ * get a two-octave piano roll that can be shifted up and down, where:
+ *
+ *   click an empty cell      add a note of the chosen length
+ *   drag from an empty cell  add a note and stretch it as you drag
+ *   drag a note             resize it (its start stays put)
+ *   click a note            remove it
+ *   shift-click             accent
  */
-function StepGrid({ store, engine, pattern, track, trackIndex }) {
+function StepGrid({ store, engine, pattern, track, trackIndex, newLength }) {
   const M = registry.get(track.instrument.id);
   const [baseOctave, setBaseOctave] = useState(M.keys ? 0 : defaultOctave(pattern.notes[track.id]));
   const gridRef = useRef();
@@ -131,41 +182,62 @@ function StepGrid({ store, engine, pattern, track, trackIndex }) {
     if (!p.notes[track.id].length) delete p.notes[track.id];
   });
 
+  // Notes are identified by pitch and start step: the same row never holds
+  // two notes starting on one step.
+  const sameNote = (n, note, step) => n.note === note && n.step === step;
+  const removeNote = (note, step) => editNotes((list) => list.filter((n) => !sameNote(n, note, step)));
+  const resizeNote = (note, step, length) =>
+    editNotes((list) => list.map((n) => (sameNote(n, note, step) ? { ...n, length } : n)));
+
   const stepAt = (clientX) => {
     const rect = gridRef.current.getBoundingClientRect();
     return Math.max(0, Math.min(pattern.length - 1, Math.floor(((clientX - rect.left) / rect.width) * pattern.length)));
   };
 
+  // A note may grow rightward up to the next note on its row, or the pattern's end.
+  const roomAfter = (note, step) =>
+    notes.filter((n) => n.note === note && n.step > step).reduce((m, n) => Math.min(m, n.step), pattern.length) - step;
+
   const onPointerDown = (e, note) => {
     if (e.button !== 0) return;
     const step = stepAt(e.clientX);
     const hit = notes.find((n) => n.note === note && n.step <= step && step < n.step + n.length);
+
+    if (hit && M.keys) return removeNote(note, hit.step);
     if (hit) {
-      editNotes((list) => list.filter((n) => n !== hit));
-      return;
+      // Nothing changes yet: moving makes this a resize, releasing in place a removal.
+      drag.current = { note, start: hit.step, length: hit.length, max: roomAfter(note, hit.step), downStep: step, moved: false, existing: true };
+    } else {
+      if (notes.length >= LIMITS.notesPerTrack) return;
+      const velocity = e.shiftKey ? 1 : 0.75;
+      const length = M.keys ? 1 : Math.min(newLength, roomAfter(note, step));
+      editNotes((list) => [...list, { step, note, velocity, length }]);
+      engine.audition(track.id, note, velocity);
+      if (M.keys) return;
+      drag.current = { note, start: step, length, max: roomAfter(note, step), downStep: step, moved: false, existing: false };
     }
-    if (notes.length >= LIMITS.notesPerTrack) return;
-    // A new note may grow rightward, up to the next note on the same row.
-    const next = notes.filter((n) => n.note === note && n.step > step).reduce((m, n) => Math.min(m, n.step), pattern.length);
-    const velocity = e.shiftKey ? 1 : 0.75;
-    editNotes((list) => [...list, { step, note, velocity, length: 1 }]);
-    engine.audition(track.id, note, velocity);
-    if (!M.keys) {
-      drag.current = { step, note, max: next - step, length: 1 };
-      gridRef.current.setPointerCapture(e.pointerId);
-    }
+    gridRef.current.setPointerCapture(e.pointerId);
   };
 
   const onPointerMove = (e) => {
     const d = drag.current;
     if (!d) return;
-    const length = Math.max(1, Math.min(d.max, stepAt(e.clientX) - d.step + 1));
+    const step = stepAt(e.clientX);
+    if (step !== d.downStep) d.moved = true;
+    if (!d.moved) return;
+    const length = Math.max(1, Math.min(d.max, step - d.start + 1));
     if (length === d.length) return;
     d.length = length;
-    editNotes((list) => list.map((n) => (n.step === d.step && n.note === d.note ? { ...n, length } : n)));
+    resizeNote(d.note, d.start, length);
   };
 
-  const endDrag = () => { drag.current = null; };
+  const onPointerUp = () => {
+    const d = drag.current;
+    drag.current = null;
+    if (d?.existing && !d.moved) removeNote(d.note, d.start);
+  };
+
+  const cancelDrag = () => { drag.current = null; };
 
   // cell lookup: "note:step" → { note, part: 'start' | 'held' | 'end' | 'single' }
   const cells = new Map();
@@ -190,7 +262,8 @@ function StepGrid({ store, engine, pattern, track, trackIndex }) {
             <button key=${r.note} class=${`row-label ${r.black ? 'black' : ''}`}
               onClick=${() => engine.audition(track.id, r.note)}>${r.label}</button>`)}
         </div>
-        <div class="cells" ref=${gridRef} onPointerMove=${onPointerMove} onPointerUp=${endDrag} onPointerCancel=${endDrag}>
+        <div class=${`cells ${M.keys ? '' : 'pitched'}`} ref=${gridRef}
+          onPointerMove=${onPointerMove} onPointerUp=${onPointerUp} onPointerCancel=${cancelDrag}>
           <div class="step-numbers">
             ${Array.from({ length: pattern.length }, (_, s) => html`
               <span key=${s} class=${`${s % 4 === 0 ? 'beat' : ''} ${s === playStep ? 'now' : ''}`}>${s % 4 === 0 ? s / 4 + 1 : ''}</span>`)}
@@ -207,8 +280,8 @@ function StepGrid({ store, engine, pattern, track, trackIndex }) {
         </div>
       </div>
       <p class="hint muted">${M.keys
-        ? 'Click to add or remove a hit. Shift-click for an accent.'
-        : 'Click to add a note, drag right to hold it longer, click a note to remove it. Shift-click for an accent. On a mono synth, overlapping notes slide.'}</p>
+        ? 'Click to add or remove a hit; drum hits are one-shots, so they have no length. Shift-click for an accent.'
+        : 'Click to add a note, or drag to stretch it as you place it. Drag a note to resize it; click it to remove. Shift-click for an accent. On a mono synth, overlapping notes slide.'}</p>
     </div>
   `;
 }

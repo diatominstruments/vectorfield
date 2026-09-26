@@ -1,4 +1,9 @@
 import { registry, sanitizeParams } from 'gloaming-instruments';
+import { SongError } from './errors.js';
+import { DEFAULT_LOOK, normalizeStyle, normalizeVisuals } from './visuals.js';
+import { normalizeBounce, defaultBounce } from './bounce.js';
+
+export { SongError };
 
 /**
  * The song document — everything a song is, stored as one JSON value:
@@ -8,14 +13,22 @@ import { registry, sanitizeParams } from 'gloaming-instruments';
  *     tracks: [{ id, name, gain, mute,
  *                instrument: { id, version, params },
  *                effects: [{ id, version, params }, ...] }],
+ *     mix: { effects: [{ id, version, params }, ...] },   // on the whole song
  *     patterns: [{ id, name, length,
- *                  notes: { [trackId]: [{ step, note, velocity, length }] } }],
- *     arrangement: [patternId, ...],   // the song view: patterns in play order
+ *                  notes: { [trackId]: [{ step, note, velocity, length }] },
+ *                  sequencers: { [trackId]: 'bounce' },   // absent = steps
+ *                  bounce: { [trackId]: { ... } } }],     // see bounce.js
+ *     arrangement: [{ id, pattern, visuals, style }],   // blocks in play order
+ *     look: { background, lineColor, ... },            // base visual style
  *   }
  *
  * Steps are sixteenth notes. `length` is in steps. Module entries use the
  * instrument library's own `{ id, version, params }` form, so any instrument
  * the library adds is storable here without changes.
+ *
+ * An arrangement block plays one pattern; the same pattern may appear in any
+ * number of blocks. A block also carries the visualizations shown while it
+ * plays and an optional style override — see visuals.js.
  *
  * Both sides run normalizeSong(): the client so the editor only ever holds
  * a valid song, the server because it can't trust the client.
@@ -47,8 +60,6 @@ export const moduleLabel = (M) =>
 
 export const newId = () => Math.random().toString(36).slice(2, 10);
 
-export class SongError extends Error {}
-
 export function moduleEntry(id, params = {}) {
   const M = registry.get(id);
   if (!M) throw new SongError(`unknown module '${id}'`);
@@ -66,8 +77,62 @@ export function newTrack(instrumentId, name) {
   };
 }
 
+export const SEQUENCERS = ['steps', 'bounce'];
+
+/**
+ * Each track in a pattern picks its own sequencer: the step grid, or
+ * bouncing balls. A track keeps both its step notes and its bounce settings
+ * whichever is chosen, so switching back and forth never loses work.
+ */
 export function newPattern(name, length = 16) {
-  return { id: newId(), name, length, notes: {} };
+  return { id: newId(), name, length, notes: {}, sequencers: {}, bounce: {} };
+}
+
+/** Which sequencer a track uses in a pattern. */
+export const sequencerOf = (pattern, trackId) => pattern.sequencers[trackId] ?? 'steps';
+
+export function newBlock(patternId, visuals = []) {
+  return { id: newId(), pattern: patternId, visuals, style: null };
+}
+
+export function newVisual(vizId) {
+  return { id: newId(), viz: vizId, bind: {}, options: {} };
+}
+
+/** A block's copy: same pattern, visuals and style, fresh ids. */
+export function copyBlock(block) {
+  return {
+    ...structuredClone(block),
+    id: newId(),
+    visuals: block.visuals.map((v) => ({ ...structuredClone(v), id: newId() })),
+  };
+}
+
+/**
+ * The visuals on screen during each block. A block with none of its own
+ * continues the most recent block that has some, so a section keeps its
+ * visuals until the next block that sets new ones. Returns, per block,
+ * `{ visuals, source }`: the list in effect and the index of the block it
+ * belongs to (-1 before any block has visuals).
+ */
+export function visualsInEffect(song) {
+  let current = { visuals: [], source: -1 };
+  return song.arrangement.map((block, i) => {
+    if (block.visuals.length) current = { visuals: block.visuals, source: i };
+    return current;
+  });
+}
+
+/** Start and end of each arrangement block, in seconds. */
+export function blockTimes(song) {
+  const byId = new Map(song.patterns.map((p) => [p.id, p]));
+  const stepSeconds = 60 / song.bpm / 4;
+  let t = 0;
+  return song.arrangement.map((block) => {
+    const start = t;
+    t += byId.get(block.pattern).length * stepSeconds;
+    return { start, end: t };
+  });
 }
 
 /** A fresh song: drums, bass and keys, with a four-on-the-floor to start from. */
@@ -78,7 +143,14 @@ export function defaultSong() {
   keys.effects.push(moduleEntry('reverb'));
   const pattern = newPattern('Pattern 1');
   pattern.notes[drums.id] = [0, 4, 8, 12].map((step) => ({ step, note: 36, velocity: 1, length: 1 }));
-  return { bpm: 120, tracks: [drums, bass, keys], patterns: [pattern], arrangement: [pattern.id] };
+  return {
+    bpm: 120,
+    tracks: [drums, bass, keys],
+    mix: { effects: [] },
+    patterns: [pattern],
+    arrangement: [newBlock(pattern.id, [newVisual('eq-bars')])],
+    look: { ...DEFAULT_LOOK },
+  };
 }
 
 // ---- validation ----------------------------------------------------------------
@@ -110,6 +182,33 @@ function module(entry, kind) {
   return { id: M.id, version, params: sanitizeParams(M, entry.params) };
 }
 
+function normalizeSequencers(p, trackIds) {
+  const sequencers = {};
+  const bounce = {};
+
+  // Songs saved when the sequencer was chosen for the whole pattern held one
+  // bounce config naming its track; it becomes that track's.
+  if (isObj(p.bounce) && typeof p.bounce.track === 'string') {
+    const { track, ...config } = p.bounce;
+    if (trackIds.has(track)) {
+      bounce[track] = normalizeBounce(config);
+      if (p.kind === 'bounce') sequencers[track] = 'bounce';
+    }
+    return { sequencers, bounce };
+  }
+
+  for (const [trackId, config] of Object.entries(isObj(p.bounce) ? p.bounce : {})) {
+    const clean = trackIds.has(trackId) ? normalizeBounce(config) : null;
+    if (clean) bounce[trackId] = clean;
+  }
+  for (const [trackId, kind] of Object.entries(isObj(p.sequencers) ? p.sequencers : {})) {
+    if (!trackIds.has(trackId) || kind !== 'bounce') continue;
+    sequencers[trackId] = 'bounce';
+    bounce[trackId] ??= defaultBounce();
+  }
+  return { sequencers, bounce };
+}
+
 /**
  * Validate and clean a song document. Structural problems (wrong shapes, bad
  * ids, unknown modules, over the limits) throw SongError; out-of-range values
@@ -130,6 +229,11 @@ export function normalizeSong(doc) {
       effects: array(t.effects ?? [], LIMITS.effectsPerTrack, 'effects').map((e) => module(e, 'effect')),
     };
   });
+  // Songs saved before the main mix had effects have no `mix`.
+  const mix = {
+    effects: array(isObj(doc.mix) ? doc.mix.effects ?? [] : [], LIMITS.effectsPerTrack, 'mix effects')
+      .map((e) => module(e, 'effect')),
+  };
   const trackIds = new Set(tracks.map((t) => t.id));
   if (trackIds.size !== tracks.length) throw new SongError('duplicate track id');
 
@@ -148,15 +252,31 @@ export function normalizeSong(doc) {
           length: int(n.length, 1, length - n.step, 1),
         }));
     }
-    return { id: id(p.id, 'pattern'), name: name(p.name, `Pattern ${i + 1}`), length, notes };
+    const { sequencers, bounce } = normalizeSequencers(p, trackIds);
+    return { id: id(p.id, 'pattern'), name: name(p.name, `Pattern ${i + 1}`), length, notes, sequencers, bounce };
   });
   const patternIds = new Set(patterns.map((p) => p.id));
   if (patternIds.size !== patterns.length) throw new SongError('duplicate pattern id');
 
+  // Songs saved before blocks carried visuals stored bare pattern ids.
+  const blockIds = new Set();
   const arrangement = array(doc.arrangement ?? [], LIMITS.arrangement, 'arrangement entries')
-    .filter((pid) => patternIds.has(pid));
+    .map((b) => (typeof b === 'string' ? newBlock(b) : b))
+    .filter((b) => isObj(b) && patternIds.has(b.pattern))
+    .map((b) => {
+      const blockId = typeof b.id === 'string' && ID.test(b.id) && !blockIds.has(b.id) ? b.id : newId();
+      blockIds.add(blockId);
+      return { id: blockId, pattern: b.pattern, visuals: normalizeVisuals(b.visuals, newId), style: normalizeStyle(b.style) };
+    });
 
-  return { bpm: num(doc.bpm, ...LIMITS.bpm, 120), tracks, patterns, arrangement };
+  return {
+    bpm: num(doc.bpm, ...LIMITS.bpm, 120),
+    tracks,
+    mix,
+    patterns,
+    arrangement,
+    look: normalizeStyle(doc.look, { complete: true }),
+  };
 }
 
 export const MAX_SONG_BYTES = 512 * 1024;

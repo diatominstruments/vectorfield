@@ -1,16 +1,9 @@
 import { useEffect, useState } from 'preact/hooks';
-import { html, Link, navigate } from '../lib.js';
+import { html, Link, navigate, ago, useTitle } from '../lib.js';
 import { api } from '../api.js';
 
-const ago = (iso) => {
-  const s = (Date.now() - new Date(iso)) / 1000;
-  if (s < 60) return 'just now';
-  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
-  return new Date(iso).toLocaleDateString();
-};
-
 export function SongList() {
+  useTitle('Studio');
   const [songs, setSongs] = useState(null);
   const [title, setTitle] = useState('');
   const [error, setError] = useState(null);
@@ -37,6 +30,7 @@ export function SongList() {
 
   return html`
     <main class="song-list">
+      <h1>Studio</h1>
       <form class="new-song" onSubmit=${createSong}>
         <input placeholder="New song title" maxlength="60" value=${title} onInput=${(e) => setTitle(e.target.value)} />
         <button class="primary">New song</button>
@@ -49,6 +43,9 @@ export function SongList() {
             ${songs.map((s) => html`
               <li key=${s.id}>
                 <${Link} href=${`/songs/${s.id}/instruments`}>${s.title}</${Link}>
+                ${s.publishedAt
+                  ? html`<${Link} href=${`/s/${s.id}`} class="badge public" title="Open the public page">Public</${Link}>`
+                  : html`<span class="badge">Private</span>`}
                 <span class="muted">${ago(s.updatedAt)}</span>
                 <button class="ghost danger" onClick=${() => remove(s)} aria-label=${`Delete ${s.title}`}>Delete</button>
               </li>`)}

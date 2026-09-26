@@ -36,6 +36,26 @@ export function Link({ href, children, ...props }) {
   return html`<a href=${href} onClick=${onClick} ...${props}>${children}</a>`;
 }
 
+/** Sets the document title: "Page · Vectorfield", or just the brand for null. */
+export function useTitle(title) {
+  useEffect(() => {
+    document.title = title ? `${title} · Vectorfield` : 'Vectorfield';
+    return () => { document.title = 'Vectorfield'; };
+  }, [title]);
+}
+
+// ---- formatting -----------------------------------------------------------------
+
+export const ago = (iso) => {
+  if (!iso) return '';
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  if (s < 86400 * 7) return `${Math.floor(s / 86400)} d ago`;
+  return new Date(iso).toLocaleDateString();
+};
+
 // ---- subscriptions -------------------------------------------------------------
 
 /** Re-render whenever `source.subscribe` fires. */

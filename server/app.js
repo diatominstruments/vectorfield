@@ -3,6 +3,7 @@ import { MAX_SONG_BYTES } from '../shared/song.js';
 import { config } from './config.js';
 import { authRouter, sessionMiddleware } from './auth.js';
 import { songsRouter } from './songs.js';
+import { publicRouter } from './public.js';
 
 const PUBLIC = new URL('../public/', import.meta.url).pathname;
 
@@ -48,6 +49,7 @@ export function createApp(db) {
   });
   api.use('/auth', authRouter(db));
   api.use('/songs', songsRouter(db));
+  api.use('/public', publicRouter(db));
   api.use((_req, res) => res.status(404).json({ error: 'Not found' }));
 
   app.use('/api', api);
