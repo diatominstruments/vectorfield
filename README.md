@@ -7,12 +7,13 @@ genres and publish it: it goes into the feed and gets a page where anyone
 can play it, visuals and all, live — nothing is rendered to video.
 
 Instruments and effects come from
-[gloaming-instruments](../Documents/gloaming-instruments), and
-visualizations from [gloaming-kit](../Documents/musicviz). Nothing in the app
-lists them by hand — every picker and control panel is generated from the
-libraries' registries, param schemas and declared visualization inputs — so
-a new or updated instrument or visualization shows up here on the next
-build.
+[gloaming-instruments](https://github.com/diatominstruments/gloaming-instruments),
+and visualizations from
+[gloaming-kit](https://github.com/diatominstruments/gloaming-kit). Nothing in
+the app lists them by hand — every picker and control panel is generated
+from the libraries' registries, param schemas and declared visualization
+inputs — so a new or updated instrument or visualization shows up here on
+the next build.
 
 ## Running it
 
@@ -25,8 +26,19 @@ npm run dev
 ```
 
 Then open http://localhost:3000. `npm run dev` rebuilds the client on change
-(including edits to the symlinked instrument library) and restarts the
-server when `server/` or `shared/` change.
+and restarts the server when `server/` or `shared/` change.
+
+**The libraries.** `package.json` pins gloaming-instruments and gloaming-kit
+to a commit in their GitHub repos, so `npm ci` gets the same code anywhere.
+To bump one, push the library, put the new commit hash after the `#` in
+`package.json`, and run `npm install`. To work on a library and see edits
+here live, link your checkout in instead — this swaps in a symlink without
+touching `package.json`, and a plain `npm install` puts the pinned version
+back:
+
+```bash
+npm link ../path/to/gloaming-instruments
+```
 
 **Database.** Set `DATABASE_URL` to use Postgres. Without it, development
 runs on [PGlite](https://pglite.dev) — real Postgres compiled to WebAssembly,

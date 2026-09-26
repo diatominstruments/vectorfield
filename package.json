@@ -14,8 +14,8 @@
   },
   "dependencies": {
     "express": "^5.2.1",
-    "gloaming-instruments": "file:../Documents/gloaming-instruments",
-    "gloaming-kit": "file:../Documents/musicviz",
+    "gloaming-instruments": "github:diatominstruments/gloaming-instruments#7b1fb6fdea4f81ebe09825efd884c652f6c8ece2",
+    "gloaming-kit": "github:diatominstruments/gloaming-kit#901ea91e5bd0369bde51dedd7bc5ad76d70c0ea2",
     "google-auth-library": "^11.1.0",
     "htm": "^3.1.1",
     "pg": "^8.23.0",
