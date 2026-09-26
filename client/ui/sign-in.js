@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { html } from '../lib.js';
 import { api } from '../api.js';
+import { currentTheme } from '../theme.js';
+import { themeInfo } from '../../shared/themes.js';
 
 const GIS_SRC = 'https://accounts.google.com/gsi/client';
 
@@ -27,7 +29,8 @@ export function SignIn({ config, onSignedIn, next }) {
         callback: ({ credential }) =>
           api.post('/auth/google', { credential }).then(({ user }) => onSignedIn(user), (e) => setError(e.message)),
       });
-      google.accounts.id.renderButton(buttonRef.current, { theme: 'filled_black', size: 'large', shape: 'pill' });
+      const dark = themeInfo(currentTheme()).scheme === 'dark';
+      google.accounts.id.renderButton(buttonRef.current, { theme: dark ? 'filled_black' : 'outline', size: 'large', shape: 'pill' });
     }, (e) => setError(e.message));
   }, [config.googleClientId]);
 

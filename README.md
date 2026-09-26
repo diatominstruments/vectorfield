@@ -48,7 +48,16 @@ stored in `.data/` — so there's nothing to install. Migrations in
 **Sign-in.** Google identifies the account, nothing more: only the account
 id, verified email and avatar are kept, never the Google name. After a
 first sign-in the user picks a username, which is the one name shown
-anywhere in the app and the address of their profile.
+anywhere in the app and the address of their profile, and a colour theme.
+
+**Themes.** Dark (the default), light, goth, dawn and forest, listed in
+`shared/themes.js`. Every colour in `public/styles.css` is a token set per
+theme under a `[data-theme]` selector, including the saturation and
+lightness that track and pattern hues are drawn at, so adding a theme is
+one more block of tokens and one entry in the list. The choice is saved on
+the account (changeable at `/settings`) and mirrored in `localStorage`,
+which `public/theme-boot.js` reads before the bundle loads so the first
+paint is already themed.
 
 Set `GOOGLE_CLIENT_ID` to an OAuth client ID (Google Cloud
 Console → APIs & Services → Credentials → OAuth client ID → Web application,
@@ -66,17 +75,20 @@ npm start        # production server (needs DATABASE_URL and GOOGLE_CLIENT_ID)
 
 ```
 client/            Preact + htm, bundled by esbuild
-  main.js          routes: / feed, /s/:id song page, /u/:username profile, /studio, /songs/:id editor
+  main.js          routes: / feed, /s/:id song page, /u/:username profile, /studio, /songs/:id editor, /settings
+  theme.js         applies a theme (data-theme on <html>) and remembers it on the device
   engine.js        audio: song doc → live instrument chains + lookahead sequencer
   store.js         the song being edited, with debounced autosave
   ui/visual-canvas.js  gloaming-kit on a canvas: analyzes the engine's output, follows its clock
   ui/visuals.js    the editor's visuals tab; ui/player.js the read-only song page
   ui/feed.js       New / For you; ui/profile.js profiles; ui/publish.js the Publish tab
   ui/genre-picker.js  choosing genres, for a song's tags or a profile's interests
+  ui/theme-picker.js  choosing a colour theme, at signup and in ui/settings.js
 shared/song.js     the song document format and its validation — both sides use it
 shared/visuals.js  validation for the visual side: looks and the kit's signal-spec language
 shared/genres.js   the electronic music taxonomy (families → genres) used for tags
 shared/users.js    username and profile rules
+shared/themes.js   the colour themes; their tokens are in public/styles.css
 server/            Express 5
   auth.js          Google ID token → our own session cookie; profile edits
   songs.js         the owner's side: CRUD with revision checks, publishing

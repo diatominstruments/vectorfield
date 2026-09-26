@@ -114,6 +114,28 @@ test('the dev sign-in names its user; the username can be changed', async () => 
   assert.equal((await again('/auth/me')).body.user.username, 'grace');
 });
 
+test('the colour theme is an account preference, chosen with the username', async () => {
+  const api = await signIn('');
+  assert.equal((await api('/auth/me')).body.user.theme, 'dark');   // the default
+
+  // Picked at signup, in the same request as the username.
+  const chosen = await api('/auth/me', { method: 'PUT', body: { username: 'themer', theme: 'forest' } });
+  assert.equal(chosen.status, 200);
+  assert.equal(chosen.body.user.theme, 'forest');
+
+  // Changed alone from settings; other fields untouched.
+  const changed = await api('/auth/me', { method: 'PUT', body: { theme: 'dawn' } });
+  assert.deepEqual([changed.body.user.theme, changed.body.user.username], ['dawn', 'themer']);
+  assert.equal((await api('/auth/me')).body.user.theme, 'dawn');
+
+  // Only known themes; a bad one changes nothing.
+  assert.equal((await api('/auth/me', { method: 'PUT', body: { theme: 'neon' } })).status, 400);
+  assert.equal((await api('/auth/me')).body.user.theme, 'dawn');
+
+  // A preference, not a public fact.
+  assert.equal('theme' in (await api('/public/users/themer')).body.user, false);
+});
+
 test('an account without a username can only choose one', async () => {
   const api = await signIn('');   // a blank dev name: nameless, like a fresh Google sign-in
 

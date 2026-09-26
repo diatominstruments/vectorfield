@@ -192,6 +192,7 @@ function draw(canvas, trace, engine, { config, trackIndex, selected, M }, gestur
   const css = getComputedStyle(canvas);
   const fg = css.getPropertyValue('--fg').trim() || '#d4d9e6';
   const muted = css.getPropertyValue('--muted').trim() || '#6d7490';
+  const tints = themeTints(css);
 
   g.clearRect(0, 0, W, W);
   g.fillStyle = css.getPropertyValue('--panel').trim() || '#13141f';
@@ -211,9 +212,9 @@ function draw(canvas, trace, engine, { config, trackIndex, selected, M }, gestur
   g.textBaseline = 'middle';
   SEGMENT_LINES.forEach(([x0, y0, x1, y1], i) => {
     const glow = lit[i];
-    g.strokeStyle = `hsl(${h} ${60 + glow * 30}% ${38 + glow * 40}%)`;
+    g.strokeStyle = `hsl(${h} ${mixTint(tints.line, tints.hot, glow)})`;
     g.lineWidth = selected === i ? 12 : 6 + glow * 8;
-    g.shadowColor = `hsl(${h} 90% 65%)`;
+    g.shadowColor = `hsl(${h} ${tints.bright})`;
     g.shadowBlur = glow * 30;
     const inset = 0.02;   // gap between segments, so each reads as its own key
     g.beginPath();
@@ -244,16 +245,16 @@ function draw(canvas, trace, engine, { config, trackIndex, selected, M }, gestur
   for (const ball of config.balls) {
     const aiming = gesture?.existing && gesture.id === ball.id && gesture.moved;
     const dir = aiming ? Math.atan2(gesture.to.y - ball.y, gesture.to.x - ball.x) : Math.atan2(ball.vy, ball.vx);
-    drawBall(g, px(ball.x), px(ball.y), BALL_RADIUS * box, dir, playing ? 0.3 : 1, h);
+    drawBall(g, px(ball.x), px(ball.y), BALL_RADIUS * box, dir, playing ? 0.3 : 1, h, tints);
   }
   if (gesture && !gesture.existing) {
     const dir = gesture.moved ? Math.atan2(gesture.to.y - gesture.from.y, gesture.to.x - gesture.from.x) : null;
-    drawBall(g, px(gesture.from.x), px(gesture.from.y), BALL_RADIUS * box, dir, 0.7, h);
+    drawBall(g, px(gesture.from.x), px(gesture.from.y), BALL_RADIUS * box, dir, 0.7, h, tints);
   }
 
   if (playing) {
-    g.fillStyle = `hsl(${h} 90% 72%)`;
-    g.shadowColor = `hsl(${h} 90% 65%)`;
+    g.fillStyle = `hsl(${h} ${tints.hot})`;
+    g.shadowColor = `hsl(${h} ${tints.bright})`;
     g.shadowBlur = 16;
     for (const ball of ballsAt(trace.trace, now)) {
       g.beginPath();
@@ -264,10 +265,31 @@ function draw(canvas, trace, engine, { config, trackIndex, selected, M }, gestur
   }
 }
 
-function drawBall(g, x, y, r, dir, alpha, h) {
+/**
+ * The theme's saturation/lightness pairs for hue-coded colour, read from the
+ * same `--tint-*` tokens styles.css uses, so the canvas matches the page in
+ * every theme. Each is a string like "70% 60%".
+ */
+function themeTints(css) {
+  const read = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
+  return {
+    line: read('--tint-line', '60% 40%'),
+    bright: read('--tint-bright', '80% 70%'),
+    hot: read('--tint-hot', '90% 75%'),
+  };
+}
+
+/** Between two "S% L%" pairs: t = 0 is `a`, t = 1 is `b`. */
+function mixTint(a, b, t) {
+  const [as, al] = a.split(/\s+/).map(parseFloat);
+  const [bs, bl] = b.split(/\s+/).map(parseFloat);
+  return `${as + (bs - as) * t}% ${al + (bl - al) * t}%`;
+}
+
+function drawBall(g, x, y, r, dir, alpha, h, tints) {
   g.globalAlpha = alpha;
-  g.strokeStyle = `hsl(${h} 80% 70%)`;
-  g.fillStyle = `hsl(${h} 60% 45%)`;
+  g.strokeStyle = `hsl(${h} ${tints.bright})`;
+  g.fillStyle = `hsl(${h} ${tints.line})`;
   g.lineWidth = 3;
   g.beginPath();
   g.arc(x, y, r, 0, Math.PI * 2);

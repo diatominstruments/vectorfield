@@ -9,6 +9,8 @@ import { Feed } from './ui/feed.js';
 import { Profile } from './ui/profile.js';
 import { SongPage } from './ui/player.js';
 import { ChooseUsername } from './ui/choose-username.js';
+import { Settings } from './ui/settings.js';
+import { applyTheme, storedTheme } from './theme.js';
 
 const EDITOR_VIEWS = 'instruments|patterns|song|visuals|publish';
 
@@ -18,6 +20,7 @@ const EDITOR_VIEWS = 'instruments|patterns|song|visuals|publish';
  *   /s/:id             a published song, playing live (everyone)
  *   /u/:username       a profile (everyone)
  *   /studio            your songs (signed in)
+ *   /settings          theme and account (signed in)
  *   /songs/:id/:view   the editor (signed in)
  *   /sign-in           sign in, then back to ?next=
  */
@@ -26,11 +29,19 @@ function route(path) {
   if (path === '/') return { name: 'feed' };
   if (path === '/sign-in') return { name: 'sign-in' };
   if (path === '/studio') return { name: 'studio', auth: true };
+  if (path === '/settings') return { name: 'settings', auth: true };
   if ((m = /^\/s\/([0-9a-f-]+)$/.exec(path))) return { name: 'song', id: m[1] };
   if ((m = /^\/u\/([a-z0-9_]+)$/i.exec(path))) return { name: 'profile', username: m[1].toLowerCase() };
   if ((m = new RegExp(`^/songs/([0-9a-f-]+)(?:/(${EDITOR_VIEWS}))?$`).exec(path))) return { name: 'editor', id: m[1], view: m[2] ?? 'instruments', auth: true };
   return { name: 'missing' };
 }
+
+/**
+ * The theme a signed-in account has chosen. An account still picking its
+ * username hasn't chosen one yet (its stored theme is only the default), so
+ * this device's last choice holds until it does. Signed out, the same.
+ */
+const accountTheme = (user) => (user?.username ? user.theme : null);
 
 function App() {
   const path = usePath();
@@ -38,13 +49,20 @@ function App() {
 
   useEffect(() => {
     Promise.all([api.get('/auth/me'), api.get('/config')])
-      .then(([{ user }, config]) => setSession({ user, config }));
+      .then(([{ user }, config]) => {
+        applyTheme(accountTheme(user) ?? storedTheme());
+        setSession({ user, config });
+      });
   }, []);
 
   if (!session) return html`<div class="loading">Loading…</div>`;
 
   const { user } = session;
-  const setUser = (u) => setSession((s) => ({ ...s, user: u }));
+  const setUser = (u) => {
+    const theme = accountTheme(u);
+    if (theme) applyTheme(theme);
+    setSession((s) => ({ ...s, user: u }));
+  };
 
   const signOut = async () => {
     await api.post('/auth/logout');
@@ -73,6 +91,8 @@ function App() {
     page = html`<${Feed} user=${user} />`;
   } else if (r.name === 'studio') {
     page = html`<${SongList} />`;
+  } else if (r.name === 'settings') {
+    page = html`<${Settings} user=${user} onUserChange=${setUser} onSignOut=${signOut} />`;
   } else if (r.name === 'editor') {
     page = html`<${Editor} key=${r.id} songId=${r.id} view=${r.view} />`;
   } else if (r.name === 'song') {
@@ -97,6 +117,7 @@ function App() {
               ${user.avatarUrl && html`<img src=${user.avatarUrl} alt="" referrerpolicy="no-referrer" />`}
               <span>${user.username}</span>
             </${Link}>
+            <${Link} href="/settings" class=${`settings-link ${r.name === 'settings' ? 'active' : ''}`} title="Settings">Settings</${Link}>
             <button class="ghost" onClick=${signOut}>Sign out</button>`
           : r.name !== 'sign-in' && html`<${Link} href=${signInHref} class="button primary">Sign in</${Link}>`}
       </div>

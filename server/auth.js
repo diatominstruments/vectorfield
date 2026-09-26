@@ -4,6 +4,7 @@ import { OAuth2Client } from 'google-auth-library';
 import { config } from './config.js';
 import { TAG_LIMITS, normalizeTags } from '../shared/genres.js';
 import { usernameProblem, suggestUsername, cleanBio } from '../shared/users.js';
+import { DEFAULT_THEME, isTheme } from '../shared/themes.js';
 
 const COOKIE = 'sid';
 const hash = (token) => createHash('sha256').update(token).digest('hex');
@@ -29,8 +30,8 @@ function setCookie(res, value, maxAgeSeconds) {
 export const publicUser = (u) => ({
   id: String(u.id), username: u.username, avatarUrl: u.avatar_url, bio: u.bio ?? '', interests: u.interests ?? [],
 });
-/** What the user sees of themselves. */
-const selfUser = (u) => ({ ...publicUser(u), email: u.email });
+/** What the user sees of themselves: also their email and colour theme. */
+const selfUser = (u) => ({ ...publicUser(u), email: u.email, theme: isTheme(u.theme) ? u.theme : DEFAULT_THEME });
 
 /** A username nobody has yet, from some text: ada, ada2, ada3, … (dev sign-in only). */
 async function freeUsername(db, text) {
@@ -118,13 +119,18 @@ export function authRouter(db) {
     res.json({ user: req.user ? selfUser(req.user) : null });
   });
 
-  // Profile edits, including the first choice of username. Only the fields
-  // sent change; a username must be free.
+  // Profile edits, including the first choice of username (and theme, made
+  // at the same step). Only the fields sent change; a username must be free.
   router.put('/me', requireUser, async (req, res) => {
     const body = req.body ?? {};
     const user = req.user;
     const bio = 'bio' in body ? cleanBio(body.bio) : user.bio;
     const interests = 'interests' in body ? normalizeTags(body.interests, TAG_LIMITS.interests) : user.interests;
+    let theme = user.theme;
+    if ('theme' in body) {
+      if (!isTheme(body.theme)) return res.status(400).json({ error: 'Unknown theme' });
+      theme = body.theme;
+    }
     let username = user.username;
     if ('username' in body) {
       username = String(body.username ?? '').trim().toLowerCase();
@@ -135,8 +141,8 @@ export function authRouter(db) {
     }
     try {
       const { rows } = await db.query(
-        'update users set bio = $2, interests = $3, username = $4 where id = $1 returning *',
-        [user.id, bio, JSON.stringify(interests), username],
+        'update users set bio = $2, interests = $3, username = $4, theme = $5 where id = $1 returning *',
+        [user.id, bio, JSON.stringify(interests), username, theme],
       );
       res.json({ user: selfUser(rows[0]) });
     } catch (err) {
