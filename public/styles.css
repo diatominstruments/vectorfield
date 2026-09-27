@@ -186,6 +186,18 @@ header.site img { width: 26px; height: 26px; border-radius: 50%; }
 .sign-in .brand { font-size: 40px; margin: 0; }
 .sign-in .tagline { margin: -10px 0 8px; color: var(--muted); }
 .dev-login { display: flex; gap: 8px; }
+/* Sized to sit under Google's large pill button. Apple's guidelines: white
+   on dark backgrounds, black on light — their colours, not the theme's. */
+.apple-button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 40px; min-width: 220px; padding: 0 20px; border-radius: 20px;
+  font: 500 15px/1 -apple-system, BlinkMacSystemFont, system-ui, sans-serif; cursor: pointer;
+}
+.apple-button svg { width: 16px; height: 16px; margin-top: -2px; }
+.apple-button, .apple-button:hover:not(:disabled) { border: 1px solid transparent; }
+.apple-button.on-dark { background: #fff; color: #000; }
+.apple-button.on-light { background: #000; color: #fff; }
+.apple-button:disabled { opacity: 0.6; cursor: default; }
 .notice { color: var(--muted); }
 
 .song-list { max-width: 720px; margin: 32px auto; padding: 0 16px; }

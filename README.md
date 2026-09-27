@@ -45,8 +45,9 @@ runs on [PGlite](https://pglite.dev) — real Postgres compiled to WebAssembly,
 stored in `.data/` — so there's nothing to install. Migrations in
 `server/migrations/` apply automatically on startup, on either.
 
-**Sign-in.** Google identifies the account, nothing more: only the account
-id, verified email and avatar are kept, never the Google name. After a
+**Sign-in.** Google or Apple identifies the account, nothing more: only the
+account id, verified email and (Google's) avatar are kept, never the name.
+The two aren't linked — signing in with each makes two accounts. After a
 first sign-in the user picks a username, which is the one name shown
 anywhere in the app and the address of their profile, and a colour theme.
 
@@ -61,7 +62,9 @@ paint is already themed.
 
 Set `GOOGLE_CLIENT_ID` to an OAuth client ID (Google Cloud
 Console → APIs & Services → Credentials → OAuth client ID → Web application,
-with `http://localhost:3000` as an authorized JavaScript origin). For local
+with `http://localhost:3000` as an authorized JavaScript origin). Apple is
+optional: set `APPLE_CLIENT_ID` to a Services ID (see `.env.example`); Apple
+only accepts HTTPS return URLs on a real domain, not localhost. For local
 work without Google, `DEV_LOGIN=1` adds a name-only sign-in; it's ignored in
 production.
 
@@ -92,7 +95,8 @@ shared/genres.js   the electronic music taxonomy (families → genres) used for 
 shared/users.js    username and profile rules
 shared/themes.js   the colour themes; their tokens are in public/styles.css
 server/            Express 5
-  auth.js          Google ID token → our own session cookie; profile edits
+  auth.js          Google/Apple ID token → our own session cookie; profile edits
+  apple.js         verifies Apple ID tokens against Apple's published keys
   songs.js         the owner's side: CRUD with revision checks, publishing
   public.js        what anyone can read: the feed, profiles, published songs
   migrations/      plain SQL, applied in order

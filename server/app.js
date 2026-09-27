@@ -7,11 +7,11 @@ import { publicRouter } from './public.js';
 
 const PUBLIC = new URL('../public/', import.meta.url).pathname;
 
-// Google's documented allowances for Identity Services; everything else is
-// same-origin only.
+// Google's documented allowances for Identity Services, and Apple's sign-in
+// script; everything else is same-origin only.
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' https://accounts.google.com/gsi/client",
+  "script-src 'self' https://accounts.google.com/gsi/client https://appleid.cdn-apple.com",
   "style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style",
   'frame-src https://accounts.google.com/gsi/',
   "connect-src 'self' https://accounts.google.com/gsi/",
@@ -26,7 +26,7 @@ export function createApp(db) {
     res.setHeader('Content-Security-Policy', CSP);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-    // Lets the Google sign-in popup report back to this window.
+    // Lets the Google and Apple sign-in popups report back to this window.
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
     next();
   });
@@ -45,7 +45,7 @@ export function createApp(db) {
   api.use(sessionMiddleware(db));
 
   api.get('/config', (_req, res) => {
-    res.json({ googleClientId: config.googleClientId, devLogin: config.devLogin });
+    res.json({ googleClientId: config.googleClientId, appleClientId: config.appleClientId, devLogin: config.devLogin });
   });
   api.use('/auth', authRouter(db));
   api.use('/songs', songsRouter(db));

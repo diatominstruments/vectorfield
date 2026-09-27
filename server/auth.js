@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { Router } from 'express';
 import { OAuth2Client } from 'google-auth-library';
 import { config } from './config.js';
+import { verifyAppleIdToken } from './apple.js';
 import { TAG_LIMITS, normalizeTags } from '../shared/genres.js';
 import { usernameProblem, suggestUsername, cleanBio } from '../shared/users.js';
 import { DEFAULT_THEME, isTheme } from '../shared/themes.js';
@@ -44,11 +45,12 @@ async function freeUsername(db, text) {
 }
 
 /**
- * Sign-in flow: the browser runs Google Identity Services, which hands it a
- * signed ID token; we verify that token's signature and audience here, then
- * issue our own session cookie. Google is only involved at sign-in, and
- * only the account id, verified email and avatar are kept — never the
- * name. A new account has no username until its owner picks one.
+ * Sign-in flow: the browser runs Google Identity Services or Sign in with
+ * Apple JS, which hands it a signed ID token; we verify that token's
+ * signature and audience here, then issue our own session cookie. The
+ * provider is only involved at sign-in, and only the account id, verified
+ * email and (Google's) avatar are kept — never the name. A new account has
+ * no username until its owner picks one.
  */
 export function authRouter(db) {
   const router = Router();
@@ -66,10 +68,11 @@ export function authRouter(db) {
     res.json({ user: selfUser(user) });
   }
 
-  async function upsertUser({ sub, email, picture, username = null }) {
+  async function upsertUser({ provider = 'google', sub, email, picture, username = null }) {
+    const col = provider === 'apple' ? 'apple_sub' : 'google_sub';
     const { rows } = await db.query(
-      `insert into users (google_sub, email, avatar_url, username) values ($1, $2, $3, $4)
-       on conflict (google_sub) do update set email = excluded.email, avatar_url = excluded.avatar_url
+      `insert into users (${col}, email, avatar_url, username) values ($1, $2, $3, $4)
+       on conflict (${col}) do update set email = excluded.email, avatar_url = excluded.avatar_url
        returning *`,
       [sub, email ?? null, picture ?? null, username],
     );
@@ -90,6 +93,21 @@ export function authRouter(db) {
       email: payload.email_verified ? payload.email : null,
       picture: payload.picture,
     });
+    await startSession(res, user);
+  });
+
+  // Apple sends the email in every ID token, though it's often a private
+  // relay address; it never sends a picture.
+  router.post('/apple', async (req, res) => {
+    if (!config.appleClientId) return res.status(503).json({ error: 'Apple sign-in is not configured' });
+    let payload;
+    try {
+      payload = await verifyAppleIdToken(String(req.body?.idToken ?? ''), { audience: config.appleClientId });
+    } catch {
+      return res.status(401).json({ error: 'Invalid Apple credential' });
+    }
+    const verified = payload.email_verified === true || payload.email_verified === 'true';
+    const user = await upsertUser({ provider: 'apple', sub: payload.sub, email: verified ? payload.email : null });
     await startSession(res, user);
   });
 
