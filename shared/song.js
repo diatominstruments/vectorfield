@@ -2,6 +2,7 @@ import { registry, sanitizeParams } from 'gloaming-instruments';
 import { SongError } from './errors.js';
 import { DEFAULT_LOOK, normalizeStyle, normalizeVisuals } from './visuals.js';
 import { normalizeBounce, defaultBounce } from './bounce.js';
+import { normalizeTubules, defaultTubules } from './tubules.js';
 
 export { SongError };
 
@@ -16,8 +17,9 @@ export { SongError };
  *     mix: { effects: [{ id, version, params }, ...] },   // on the whole song
  *     patterns: [{ id, name, length,
  *                  notes: { [trackId]: [{ step, note, velocity, length }] },
- *                  sequencers: { [trackId]: 'bounce' },   // absent = steps
- *                  bounce: { [trackId]: { ... } } }],     // see bounce.js
+ *                  sequencers: { [trackId]: 'bounce' | 'tubules' },   // absent = steps
+ *                  bounce: { [trackId]: { ... } },        // see bounce.js
+ *                  tubules: { [trackId]: { ... } } }],    // see tubules.js
  *     arrangement: [{ id, pattern, visuals, style }],   // blocks in play order
  *     look: { background, lineColor, ... },            // base visual style
  *   }
@@ -78,15 +80,16 @@ export function newTrack(instrumentId, name) {
   };
 }
 
-export const SEQUENCERS = ['steps', 'bounce'];
+export const SEQUENCERS = ['steps', 'bounce', 'tubules'];
 
 /**
- * Each track in a pattern picks its own sequencer: the step grid, or
- * bouncing balls. A track keeps both its step notes and its bounce settings
- * whichever is chosen, so switching back and forth never loses work.
+ * Each track in a pattern picks its own sequencer: the step grid, bouncing
+ * balls or microtubules. A track keeps its step notes and the settings of
+ * every sequencer it has tried, whichever is chosen, so switching back and
+ * forth never loses work.
  */
 export function newPattern(name, length = 16) {
-  return { id: newId(), name, length, notes: {}, sequencers: {}, bounce: {} };
+  return { id: newId(), name, length, notes: {}, sequencers: {}, bounce: {}, tubules: {} };
 }
 
 /** Which sequencer a track uses in a pattern. */
@@ -195,9 +198,17 @@ function module(entry, kind) {
   return { id: M.id, version, params: sanitizeParams(M, entry.params) };
 }
 
+// Each generative sequencer: where its settings live on a pattern, and how
+// to clean or start them.
+const GENERATIVE = {
+  bounce: { normalize: normalizeBounce, fresh: defaultBounce },
+  tubules: { normalize: normalizeTubules, fresh: defaultTubules },
+};
+
 function normalizeSequencers(p, trackIds) {
   const sequencers = {};
   const bounce = {};
+  const tubules = {};
 
   // Songs saved when the sequencer was chosen for the whole pattern held one
   // bounce config naming its track; it becomes that track's.
@@ -207,19 +218,22 @@ function normalizeSequencers(p, trackIds) {
       bounce[track] = normalizeBounce(config);
       if (p.kind === 'bounce') sequencers[track] = 'bounce';
     }
-    return { sequencers, bounce };
+    return { sequencers, bounce, tubules };
   }
 
-  for (const [trackId, config] of Object.entries(isObj(p.bounce) ? p.bounce : {})) {
-    const clean = trackIds.has(trackId) ? normalizeBounce(config) : null;
-    if (clean) bounce[trackId] = clean;
+  const settings = { bounce, tubules };
+  for (const [kind, { normalize }] of Object.entries(GENERATIVE)) {
+    for (const [trackId, config] of Object.entries(isObj(p[kind]) ? p[kind] : {})) {
+      const clean = trackIds.has(trackId) ? normalize(config) : null;
+      if (clean) settings[kind][trackId] = clean;
+    }
   }
   for (const [trackId, kind] of Object.entries(isObj(p.sequencers) ? p.sequencers : {})) {
-    if (!trackIds.has(trackId) || kind !== 'bounce') continue;
-    sequencers[trackId] = 'bounce';
-    bounce[trackId] ??= defaultBounce();
+    if (!trackIds.has(trackId) || !Object.hasOwn(GENERATIVE, kind)) continue;
+    sequencers[trackId] = kind;
+    settings[kind][trackId] ??= GENERATIVE[kind].fresh();
   }
-  return { sequencers, bounce };
+  return { sequencers, bounce, tubules };
 }
 
 /**
@@ -265,8 +279,8 @@ export function normalizeSong(doc) {
           length: int(n.length, 1, length - n.step, 1),
         }));
     }
-    const { sequencers, bounce } = normalizeSequencers(p, trackIds);
-    return { id: id(p.id, 'pattern'), name: name(p.name, `Pattern ${i + 1}`), length, notes, sequencers, bounce };
+    const { sequencers, bounce, tubules } = normalizeSequencers(p, trackIds);
+    return { id: id(p.id, 'pattern'), name: name(p.name, `Pattern ${i + 1}`), length, notes, sequencers, bounce, tubules };
   });
   const patternIds = new Set(patterns.map((p) => p.id));
   if (patternIds.size !== patterns.length) throw new SongError('duplicate pattern id');

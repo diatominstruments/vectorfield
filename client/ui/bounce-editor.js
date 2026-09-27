@@ -37,7 +37,7 @@ export function BounceEditor({ store, engine, pattern, track, trackIndex }) {
   useEffect(() => {
     let raf;
     const frame = () => {
-      draw(canvasRef.current, engine.bounceTrace(pattern.id, track.id), engine, live.current, gesture.current);
+      draw(canvasRef.current, engine.sequencerTrace(pattern.id, track.id, 'bounce'), engine, live.current, gesture.current);
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
@@ -156,9 +156,9 @@ export function BounceEditor({ store, engine, pattern, track, trackIndex }) {
   `;
 }
 
-function Range({ label, min, max, step, value, format, onInput }) {
+export function Range({ label, title, min, max, step, value, format, onInput }) {
   return html`
-    <label class="field">
+    <label class="field" title=${title}>
       <span>${label}</span>
       <input type="range" min=${min} max=${max} step=${step} value=${value} onInput=${(e) => onInput(Number(e.target.value))} />
       <output>${format(value)}</output>
@@ -270,7 +270,7 @@ function draw(canvas, trace, engine, { config, trackIndex, selected, M }, gestur
  * same `--tint-*` tokens styles.css uses, so the canvas matches the page in
  * every theme. Each is a string like "70% 60%".
  */
-function themeTints(css) {
+export function themeTints(css) {
   const read = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
   return {
     line: read('--tint-line', '60% 40%'),
@@ -280,7 +280,7 @@ function themeTints(css) {
 }
 
 /** Between two "S% L%" pairs: t = 0 is `a`, t = 1 is `b`. */
-function mixTint(a, b, t) {
+export function mixTint(a, b, t) {
   const [as, al] = a.split(/\s+/).map(parseFloat);
   const [bs, bl] = b.split(/\s+/).map(parseFloat);
   return `${as + (bs - as) * t}% ${al + (bl - al) * t}%`;

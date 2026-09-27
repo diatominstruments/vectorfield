@@ -1,10 +1,12 @@
 import { create, chain } from 'gloaming-instruments';
 import { blockTimes, sequencerOf } from '../shared/song.js';
 import { BounceSim } from './bounce-sim.js';
+import { TubuleSim } from './tubule-sim.js';
 
 const LOOKAHEAD = 0.12;   // seconds of audio scheduled ahead of the clock
 const TICK_MS = 25;
 const STEPS_PER_BEAT = 4;
+const TUBULE_VELOCITY = 0.7;
 
 /**
  * Engine — turns a song document into sound. Owns the AudioContext, one
@@ -141,7 +143,7 @@ export class Engine {
     this.startIndex = this.cursor.index;
     this.nextTime = this.ctx.currentTime + 0.05;
     this.queue = [];         // note events waiting for their time; see #enqueue
-    this.sims = new Map();   // pattern + track → { sim, trace, hits }; fresh balls every play
+    this.sims = new Map();   // pattern + track + sequencer → its simulation; fresh every play
     this.heard = [];         // positions waiting for the clock to reach them
     this.playing = true;
     this.timer = setInterval(() => this.#tick(), TICK_MS);
@@ -182,9 +184,17 @@ export class Engine {
 
       const t = this.nextTime;
       const stepLength = 60 / this.song.bpm / STEPS_PER_BEAT;
+      const stepped = new Set();
       for (const track of this.song.tracks) {
-        if (sequencerOf(pattern, track.id) === 'bounce') this.#bounceStep(pattern, track, t, stepLength);
+        const kind = sequencerOf(pattern, track.id);
+        if (kind === 'bounce') this.#bounceStep(pattern, track, t, stepLength);
+        else if (kind === 'tubules') stepped.add(this.#tubuleStep(pattern, track, t, stepLength));
         else this.#gridStep(pattern, track, t, stepLength);
+      }
+      // Tubules hold their notes, so any left sounding from another pattern
+      // (or a track that has changed sequencer) must let go.
+      for (const [key, entry] of this.sims) {
+        if (entry.voices?.size && !stepped.has(key)) this.#silenceTubules(entry, t);
       }
       this.#flush(t + stepLength);
       this.heard.push({ time: t, patternId: pattern.id, index: this.cursor.index, step: this.cursor.step });
@@ -215,7 +225,7 @@ export class Engine {
   // from where they were the next time the pattern comes round.
   #bounceStep(pattern, track, t, stepLength) {
     const config = pattern.bounce[track.id];
-    const key = simKey(pattern.id, track.id);
+    const key = simKey(pattern.id, track.id, 'bounce');
     let entry = this.sims.get(key);
     if (!entry) {
       entry = { sim: new BounceSim(config), trace: [], hits: [] };
@@ -247,6 +257,93 @@ export class Engine {
     }
   }
 
+  // Microtubules: run the track's tubules through this step. Holding, each
+  // zone sounds for as long as a tubule sounds it (see tubules.js for what
+  // that means in each `sound` setting); otherwise each ring a tip grows
+  // into plays its notes for the set length. Tubules sounding the same
+  // note share it. Like the balls, they live for the whole playback.
+  // Returns the entry's key.
+  #tubuleStep(pattern, track, t, stepLength) {
+    const config = pattern.tubules[track.id];
+    const key = simKey(pattern.id, track.id, 'tubules');
+    let entry = this.sims.get(key);
+    if (!entry) {
+      entry = { sim: new TubuleSim(config), trace: [], hits: [], voices: new Map(), held: new Map(), instrument: null };
+      this.sims.set(key, entry);
+    }
+    entry.sim.sync(config);
+
+    // A muted track's tubules keep growing; they just don't sound.
+    const instrument = track.mute ? null : this.live.get(track.id)?.instrument ?? null;
+    if (instrument !== entry.instrument) {
+      this.#silenceTubules(entry, t);
+      entry.instrument = instrument;
+    }
+
+    // Bring what's held in line with the tubules. At the start of the step
+    // that catches edits (tuning, sections, the sound or hold settings), an
+    // unmute, or this pattern coming round again; after each change inside
+    // it, the tubules themselves.
+    const noteOf = ({ ring, section }) => config.rings[ring][section];
+    const reconcile = (time) => {
+      const want = config.hold && instrument ? entry.sim.voices() : new Map();
+      for (const [id, note] of entry.voices) {
+        if (!want.has(id) || noteOf(want.get(id)) !== note) this.#releaseVoice(entry, id, time);
+      }
+      for (const [id, zone] of want) if (!entry.voices.has(id)) this.#holdVoice(entry, id, noteOf(zone), time);
+    };
+    reconcile(t);
+
+    const beat = stepLength * STEPS_PER_BEAT;
+    if (!entry.trace.length) entry.trace.push({ time: t, tubules: snapshotTubules(entry.sim.tubules.values()) });
+    const entries = entry.sim.advance(1 / STEPS_PER_BEAT, (at, tubules) => {
+      entry.trace.push({ time: t + at * beat, tubules: snapshotTubules(tubules) });
+      reconcile(t + at * beat);
+    });
+    const keepFrom = this.ctx.currentTime - 2;
+    while (entry.trace.length > 2 && entry.trace[1].time < keepFrom) entry.trace.shift();
+    while (entry.hits.length && entry.hits[0].time < keepFrom) entry.hits.shift();
+
+    for (const e of entries) {
+      const time = t + e.at * beat;
+      entry.hits.push({ time, ring: e.ring, section: e.section });
+      if (!instrument || config.hold) continue;
+      // Struck notes: the tip's zone, or with it every zone the tubule passes through.
+      const rings = config.sound === 'whole' ? Array.from({ length: e.ring + 1 }, (_, r) => r) : [e.ring];
+      const notes = new Set(rings.map((ring) => noteOf({ ring, section: e.section })));
+      for (const note of notes) this.#queueOn(time, instrument, note, TUBULE_VELOCITY, config.gate * stepLength);
+    }
+    return key;
+  }
+
+  // Held notes are counted per pitch, so two tubules sounding one note are
+  // one note that ends when the last of them lets go.
+  #holdVoice(entry, id, note, time) {
+    entry.voices.set(id, note);
+    const count = entry.held.get(note) ?? 0;
+    entry.held.set(note, count + 1);
+    if (!count) this.#enqueue({ time, on: true, instrument: entry.instrument, note, velocity: TUBULE_VELOCITY, length: null });
+  }
+
+  #releaseVoice(entry, id, time) {
+    const note = entry.voices.get(id);
+    entry.voices.delete(id);
+    const count = entry.held.get(note) - 1;
+    if (count) {
+      entry.held.set(note, count);
+      return;
+    }
+    entry.held.delete(note);
+    // An instrument swapped out has already been silenced and disposed.
+    if ([...this.live.values()].some((l) => l.instrument === entry.instrument)) {
+      this.#enqueue({ time, on: false, instrument: entry.instrument, note });
+    }
+  }
+
+  #silenceTubules(entry, time) {
+    for (const id of [...entry.voices.keys()]) this.#releaseVoice(entry, id, time);
+  }
+
   // Every note-on and note-off goes through one queue in time order, and
   // offs sort before ons at the same instant: instruments must see events in
   // order, and a note ending where the next begins is a retrigger, not an
@@ -269,7 +366,8 @@ export class Engine {
       const e = this.queue.shift();
       if (e.on) {
         e.instrument.noteOn(e.note, e.velocity, e.time);
-        this.#enqueue({ time: e.time + e.length, on: false, instrument: e.instrument, note: e.note });
+        // Held notes (length null) are ended by their own note-off.
+        if (e.length != null) this.#enqueue({ time: e.time + e.length, on: false, instrument: e.instrument, note: e.note });
       } else {
         e.instrument.noteOff(e.note, e.time);
       }
@@ -280,15 +378,20 @@ export class Engine {
   // hits snapped past the end), then stop once that moment has been heard.
   #finish() {
     clearInterval(this.timer);
+    for (const entry of this.sims.values()) if (entry.voices) this.#silenceTubules(entry, this.nextTime);
     this.queue = this.queue.filter((e) => !e.on);
     this.#flush(Infinity);
     const wait = Math.max(0, this.nextTime - this.ctx.currentTime);
     this.finishTimer = setTimeout(() => this.stop(), wait * 1000);
   }
 
-  /** What a track's balls in a pattern have been doing, for drawing; null unless playing. */
-  bounceTrace(patternId, trackId) {
-    return this.playing ? this.sims?.get(simKey(patternId, trackId)) ?? null : null;
+  /**
+   * What a track's balls or tubules in a pattern have been doing, for
+   * drawing: { trace: [{ time, balls | tubules }], hits: [{ time, … }] }.
+   * Null unless playing.
+   */
+  sequencerTrace(patternId, trackId, kind) {
+    return this.playing ? this.sims?.get(simKey(patternId, trackId, kind)) ?? null : null;
   }
 
   // The scheduler runs ahead of the speakers; the UI should follow what's
@@ -353,5 +456,6 @@ function updateParams(module, params) {
   }
 }
 
-const simKey = (patternId, trackId) => `${patternId}:${trackId}`;
+const simKey = (patternId, trackId, kind) => `${patternId}:${trackId}:${kind}`;
 const snapshot = (balls) => balls.map(({ id, x, y }) => ({ id, x, y }));
+const snapshotTubules = (tubules) => [...tubules].map(({ id, angle, length, growing }) => ({ id, angle, length, growing }));

@@ -3,10 +3,19 @@ import { registry } from 'gloaming-instruments';
 import { html, hue, noteName, isBlackKey, useEngineEvent } from '../lib.js';
 import { LIMITS, PATTERN_LENGTHS, newPattern, newId, sequencerOf } from '../../shared/song.js';
 import { defaultBounce } from '../../shared/bounce.js';
+import { defaultTubules } from '../../shared/tubules.js';
 import { plural } from './song-view.js';
 import { BounceEditor } from './bounce-editor.js';
+import { TubuleEditor } from './tubule-editor.js';
 
 const VISIBLE_OCTAVES = 2;
+
+// The sequencers besides the step grid: how each is named, starts out, and
+// sums itself up on its track's tab.
+const GENERATIVE = {
+  bounce: { label: 'Bouncing balls', fresh: defaultBounce, Editor: BounceEditor, summary: (c) => plural(c.balls.length, 'ball') },
+  tubules: { label: 'Microtubules', fresh: defaultTubules, Editor: TubuleEditor, summary: (c) => plural(c.rings.length * c.sections, 'zone') },
+};
 
 export function PatternsView({ store, engine, pattern, onSelect }) {
   const { doc } = store;
@@ -14,15 +23,16 @@ export function PatternsView({ store, engine, pattern, onSelect }) {
   const [newLength, setNewLength] = useState(1);
   const track = doc.tracks.find((t) => t.id === trackId) ?? doc.tracks[0];
   const pitched = track && !registry.get(track.instrument.id).keys;
-  const bouncing = track && pattern && sequencerOf(pattern, track.id) === 'bounce';
+  const kind = track && pattern ? sequencerOf(pattern, track.id) : 'steps';
+  const generative = GENERATIVE[kind];
 
-  // A track keeps its notes and its bounce settings whichever sequencer it
+  // A track keeps its notes and each sequencer's settings whichever it
   // uses, so switching back and forth loses nothing.
-  const setSequencer = (kind) => store.edit((d) => {
+  const setSequencer = (next) => store.edit((d) => {
     const p = d.patterns.find((x) => x.id === pattern.id);
-    if (kind === 'bounce') {
-      p.sequencers[track.id] = 'bounce';
-      p.bounce[track.id] ??= defaultBounce(registry.get(track.instrument.id).keys);
+    if (GENERATIVE[next]) {
+      p.sequencers[track.id] = next;
+      p[next][track.id] ??= GENERATIVE[next].fresh(registry.get(track.instrument.id).keys);
     } else {
       delete p.sequencers[track.id];
     }
@@ -48,7 +58,7 @@ export function PatternsView({ store, engine, pattern, onSelect }) {
           ${doc.patterns.map((p, i) => html`
             <li key=${p.id} class=${p.id === pattern.id ? 'active' : ''} style=${`--hue: ${hue(i)}`}>
               <button class="ghost" onClick=${() => onSelect(p.id)}>
-                ${Object.keys(p.sequencers).length > 0 && html`<span class="kind-dot" title="Has bouncing-ball tracks">●</span>`}${p.name}
+                ${Object.keys(p.sequencers).length > 0 && html`<span class="kind-dot" title="Has generative tracks">●</span>`}${p.name}
               </button>
             </li>`)}
         </ul>
@@ -62,24 +72,25 @@ export function PatternsView({ store, engine, pattern, onSelect }) {
           : html`
             <nav class="track-tabs">
               ${doc.tracks.map((t, i) => {
-                const bounces = sequencerOf(pattern, t.id) === 'bounce';
+                const k = sequencerOf(pattern, t.id);
+                const gen = GENERATIVE[k];
                 return html`
                   <button key=${t.id} class=${t.id === track.id ? 'active' : ''} style=${`--hue: ${hue(i)}`}
                     onClick=${() => setTrackId(t.id)}>
-                    ${bounces && html`<span class="kind-dot" title="Bouncing balls">●</span>`}${t.name}
-                    <small>${bounces ? `${pattern.bounce[t.id].balls.length} balls` : pattern.notes[t.id]?.length || ''}</small>
+                    ${gen && html`<span class="kind-dot" title=${gen.label}>●</span>`}${t.name}
+                    <small>${gen ? gen.summary(pattern[k][t.id]) : pattern.notes[t.id]?.length || ''}</small>
                   </button>`;
               })}
             </nav>
             <label class="sequencer-choice">
               <span class="muted">${track.name} sequencer</span>
-              <select value=${bouncing ? 'bounce' : 'steps'} onChange=${(e) => setSequencer(e.target.value)}>
+              <select value=${kind} onChange=${(e) => setSequencer(e.target.value)}>
                 <option value="steps">Steps</option>
-                <option value="bounce">Bouncing balls</option>
+                ${Object.entries(GENERATIVE).map(([k, g]) => html`<option value=${k}>${g.label}</option>`)}
               </select>
             </label>
-            ${bouncing
-              ? html`<${BounceEditor} key=${`${pattern.id}:${track.id}`} store=${store} engine=${engine} pattern=${pattern} track=${track}
+            ${generative
+              ? html`<${generative.Editor} key=${`${pattern.id}:${track.id}:${kind}`} store=${store} engine=${engine} pattern=${pattern} track=${track}
                   trackIndex=${doc.tracks.indexOf(track)} />`
               : html`
             ${pitched && html`

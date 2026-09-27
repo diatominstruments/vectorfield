@@ -48,6 +48,7 @@ function TrackCard({ track, index, store, engine }) {
         delete p.notes[track.id];
         delete p.sequencers[track.id];
         delete p.bounce[track.id];
+        delete p.tubules[track.id];
       }
     });
   };

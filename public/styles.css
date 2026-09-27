@@ -376,6 +376,13 @@ input[type=range].centered::-moz-range-progress { background: transparent; }
 .ball-row span { flex: 1; }
 .wall-tuning .field { grid-template-columns: 96px 1fr; }
 .wall-tuning .field.selected > span { color: var(--fg); }
+.tubule-canvas { cursor: pointer; }
+.zone-grid { display: grid; grid-template-columns: 48px repeat(var(--sections), minmax(0, 1fr)); gap: 4px; align-items: center; font-size: 12px; }
+.zone-grid button { padding: 4px 2px; font: 11px ui-monospace, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zone-grid button.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.zone-tune { display: flex; gap: 6px; margin-top: 8px; }
+.zone-tune select { flex: 1; min-width: 0; }
+.bounce-controls h4 .muted { font-weight: normal; font-size: 12px; margin-left: 4px; }
 
 /* ---- song ---- */
 
