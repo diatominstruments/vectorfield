@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { registry } from 'gloaming-instruments';
-import { html, hue, noteName } from '../lib.js';
+import { html, noteName } from '../lib.js';
 import { CORE, SECTIONS, TUBULE_LIMITS, resection, ringAt, ringStart, sectionAt, sectionStart } from '../../shared/tubules.js';
 import { TubuleSim } from '../tubule-sim.js';
 import { Range, mixTint, themeTints } from './bounce-editor.js';
@@ -23,7 +23,7 @@ const ringName = (i, n) => (n === 1 ? 'Ring' : i === 0 ? 'Inner' : i === n - 1 ?
  * preview runs instead, so changes to the rates can be watched as they're
  * made.
  */
-export function TubuleEditor({ store, engine, pattern, track, trackIndex }) {
+export function TubuleEditor({ store, engine, pattern, track }) {
   const config = pattern.tubules[track.id];
   const canvasRef = useRef();
   const [picked, setSelected] = useState(null);   // zone being tuned: { ring, section }
@@ -35,7 +35,7 @@ export function TubuleEditor({ store, engine, pattern, track, trackIndex }) {
 
   // Latest props for the draw loop, which outlives any one render.
   const live = useRef();
-  live.current = { config, trackIndex, selected, M, bpm: store.doc.bpm };
+  live.current = { config, selected, M, bpm: store.doc.bpm };
 
   useEffect(() => {
     let raf;
@@ -106,7 +106,7 @@ export function TubuleEditor({ store, engine, pattern, track, trackIndex }) {
   };
 
   return html`
-    <div class="bounce-editor tubule-editor" style=${`--hue: ${hue(trackIndex)}`}>
+    <div class="bounce-editor tubule-editor">
       <div class="bounce-stage">
         <canvas ref=${canvasRef} class="bounce-canvas tubule-canvas" width="840" height="840" onPointerDown=${onPointerDown}></canvas>
         <p class="hint muted">Tubules grow out from the centre, and at random collapse back into it. Each zone of the cell plays its note as tubules reach it. Click a zone to hear and tune it.</p>
@@ -217,18 +217,18 @@ function tubulesAt(trace, now) {
 
 // ---- drawing ---------------------------------------------------------------------
 
-function draw(canvas, { now, tubules, hits, preview }, { config, trackIndex, selected, M }) {
+function draw(canvas, { now, tubules, hits, preview }, { config, selected, M }) {
   if (!canvas) return;
   const g = canvas.getContext('2d');
   const W = canvas.width;
   const C = W / 2;
   const R = C - MARGIN;
-  const h = hue(trackIndex);
   const css = getComputedStyle(canvas);
   const fg = css.getPropertyValue('--fg').trim() || '#d4d9e6';
   const muted = css.getPropertyValue('--muted').trim() || '#6d7490';
   const panel = css.getPropertyValue('--panel').trim() || '#13141f';
   const tints = themeTints(css);
+  const h = tints.hue;
   const n = config.rings.length;
   const S = config.sections;
   const arc = (2 * Math.PI) / S;

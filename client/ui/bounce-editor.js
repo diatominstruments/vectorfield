@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { registry } from 'gloaming-instruments';
-import { html, hue, noteName } from '../lib.js';
+import { html, noteName } from '../lib.js';
 import { BALL_RADIUS, BOUNCE_LIMITS, QUANTIZE, SEGMENTS, newBall } from '../../shared/bounce.js';
 import { newId } from '../../shared/song.js';
 
@@ -21,7 +21,7 @@ const FLASH_SECONDS = 0.25;
  * own simulation (read back against the audio clock), so what you see is
  * what you hear.
  */
-export function BounceEditor({ store, engine, pattern, track, trackIndex }) {
+export function BounceEditor({ store, engine, pattern, track }) {
   const config = pattern.bounce[track.id];
   const canvasRef = useRef();
   const gesture = useRef(null);
@@ -32,7 +32,7 @@ export function BounceEditor({ store, engine, pattern, track, trackIndex }) {
 
   // Latest props for the draw loop, which outlives any one render.
   const live = useRef();
-  live.current = { config, trackIndex, selected, M };
+  live.current = { config, selected, M };
 
   useEffect(() => {
     let raf;
@@ -108,7 +108,7 @@ export function BounceEditor({ store, engine, pattern, track, trackIndex }) {
   });
 
   return html`
-    <div class="bounce-editor" style=${`--hue: ${hue(trackIndex)}`}>
+    <div class="bounce-editor">
       <div class="bounce-stage">
         <canvas ref=${canvasRef} class="bounce-canvas" width="840" height="840"
           onPointerDown=${onPointerDown} onPointerMove=${onPointerMove} onPointerUp=${onPointerUp}
@@ -182,17 +182,17 @@ function ballsAt(trace, now) {
   });
 }
 
-function draw(canvas, trace, engine, { config, trackIndex, selected, M }, gesture) {
+function draw(canvas, trace, engine, { config, selected, M }, gesture) {
   if (!canvas) return;
   const g = canvas.getContext('2d');
   const W = canvas.width;
   const box = W - 2 * MARGIN;
   const px = (v) => MARGIN + v * box;
-  const h = hue(trackIndex);
   const css = getComputedStyle(canvas);
   const fg = css.getPropertyValue('--fg').trim() || '#d4d9e6';
   const muted = css.getPropertyValue('--muted').trim() || '#6d7490';
   const tints = themeTints(css);
+  const h = tints.hue;
 
   g.clearRect(0, 0, W, W);
   g.fillStyle = css.getPropertyValue('--panel').trim() || '#13141f';
@@ -266,13 +266,15 @@ function draw(canvas, trace, engine, { config, trackIndex, selected, M }, gestur
 }
 
 /**
- * The theme's saturation/lightness pairs for hue-coded colour, read from the
- * same `--tint-*` tokens styles.css uses, so the canvas matches the page in
- * every theme. Each is a string like "70% 60%".
+ * The colour to draw in, read from the same tokens styles.css uses, so the
+ * canvas matches the page in every theme: the `--hue` in effect where the
+ * canvas is (for these editors, the theme's accent), and the `--tint-*`
+ * saturation/lightness pairs, each a string like "70% 60%".
  */
 export function themeTints(css) {
   const read = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
   return {
+    hue: read('--hue', '160'),
     line: read('--tint-line', '60% 40%'),
     bright: read('--tint-bright', '80% 70%'),
     hot: read('--tint-hot', '90% 75%'),

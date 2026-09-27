@@ -90,8 +90,7 @@ export function PatternsView({ store, engine, pattern, onSelect }) {
               </select>
             </label>
             ${generative
-              ? html`<${generative.Editor} key=${`${pattern.id}:${track.id}:${kind}`} store=${store} engine=${engine} pattern=${pattern} track=${track}
-                  trackIndex=${doc.tracks.indexOf(track)} />`
+              ? html`<${generative.Editor} key=${`${pattern.id}:${track.id}:${kind}`} store=${store} engine=${engine} pattern=${pattern} track=${track} />`
               : html`
             ${pitched && html`
               <div class="note-length" role="radiogroup" aria-label="Length of new notes">
