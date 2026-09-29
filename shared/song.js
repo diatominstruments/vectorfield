@@ -20,7 +20,10 @@ export { SongError };
  *                  sequencers: { [trackId]: 'bounce' | 'tubules' },   // absent = steps
  *                  bounce: { [trackId]: { ... } },        // see bounce.js
  *                  tubules: { [trackId]: { ... } } }],    // see tubules.js
- *     arrangement: [{ id, pattern, visuals, style }],   // blocks in play order
+ *     arrangement: [{ id, pattern, visuals, style,     // blocks in play order
+ *                     repeat, mute: [trackId], section,
+ *                     follow: [{ to: blockId | null, weight }] }],
+ *     loop: blockId | null,                            // where the song goes on from at its end
  *     look: { background, lineColor, ... },            // base visual style
  *   }
  *
@@ -33,6 +36,13 @@ export { SongError };
  * plays and an optional style override, which carries on through later
  * blocks until one changes the same setting — see visuals.js.
  *
+ * A block plays its pattern `repeat` times, silencing the tracks in its
+ * `mute`. A `section` name starts a section that runs until the next block
+ * with one. When a block ends, the song goes on to the next block — or, if
+ * the block has `follow` choices, to one of them picked at random by weight
+ * (`to: null` ends the song). After the last block the song stops, unless
+ * `loop` names a block to go back to.
+ *
  * Both sides run normalizeSong(): the client so the editor only ever holds
  * a valid song, the server because it can't trust the client.
  */
@@ -44,6 +54,10 @@ export const LIMITS = Object.freeze({
   arrangement: 512,
   notesPerTrack: 1024,   // per pattern
   nameLength: 60,
+  sectionLength: 40,
+  repeat: 16,            // times a block plays its pattern
+  follow: 8,             // choices for what plays after a block
+  weight: 9,             // the most likely a choice can be
   bpm: [40, 300],
 });
 
@@ -96,21 +110,81 @@ export function newPattern(name, length = 16) {
 export const sequencerOf = (pattern, trackId) => pattern.sequencers[trackId] ?? 'steps';
 
 export function newBlock(patternId, visuals = []) {
-  return { id: newId(), pattern: patternId, visuals, style: null };
+  return { id: newId(), pattern: patternId, visuals, style: null, repeat: 1, mute: [], section: null, follow: [] };
 }
 
 export function newVisual(vizId) {
   return { id: newId(), viz: vizId, bind: {}, options: {} };
 }
 
-/** A block's copy: same pattern, visuals and style, fresh ids. */
+/**
+ * A block's copy: same pattern, visuals, style and settings, fresh ids. The
+ * copy continues its original's section rather than starting another.
+ */
 export function copyBlock(block) {
   return {
     ...structuredClone(block),
     id: newId(),
     visuals: block.visuals.map((v) => ({ ...structuredClone(v), id: newId() })),
+    section: null,
   };
 }
+
+/**
+ * Take a block out of the song, along with the loop and follow choices
+ * that lead to it. Mutates `doc`.
+ */
+export function removeBlock(doc, index) {
+  const [gone] = doc.arrangement.splice(index, 1);
+  if (doc.loop === gone.id) doc.loop = null;
+  for (const b of doc.arrangement) b.follow = b.follow.filter((f) => f.to !== gone.id);
+}
+
+/**
+ * The index of the block that plays after block `index` has finished: one
+ * of its follow choices, picked by weight with `random()` in [0, 1), or else
+ * the next block; past the last block, the loop block. -1 when the song
+ * ends there.
+ */
+export function nextBlock(song, index, random = Math.random) {
+  const indexOf = (id) => song.arrangement.findIndex((b) => b.id === id);
+  const choices = (song.arrangement[index]?.follow ?? []).filter((f) => f.to === null || indexOf(f.to) >= 0);
+  if (choices.length) {
+    let r = random() * choices.reduce((sum, f) => sum + f.weight, 0);
+    const pick = choices.find((f) => (r -= f.weight) < 0) ?? choices.at(-1);
+    return pick.to === null ? -1 : indexOf(pick.to);
+  }
+  if (index + 1 < song.arrangement.length) return index + 1;
+  return song.loop ? indexOf(song.loop) : -1;
+}
+
+/**
+ * How a song plays through: 'once' straight through, 'loops' forever from
+ * its loop block, or 'varies' when follow choices pick the way.
+ */
+export function playOrder(song) {
+  if (song.arrangement.some((b) => b.follow.length)) return 'varies';
+  return song.loop && song.arrangement.some((b) => b.id === song.loop) ? 'loops' : 'once';
+}
+
+/**
+ * The sections of the song, in order: runs of blocks that start at a block
+ * with a section name and carry on until the next. Blocks before the first
+ * name form an unnamed run. Returns [{ name, from, to }] with block indices,
+ * `to` exclusive.
+ */
+export function sections(song) {
+  const runs = [];
+  song.arrangement.forEach((block, i) => {
+    if (!runs.length || block.section) runs.push({ name: block.section, from: i, to: i + 1 });
+    else runs.at(-1).to = i + 1;
+  });
+  return runs;
+}
+
+/** The section each block belongs to: its name, or null. */
+export const sectionOf = (song, index) =>
+  sections(song).find((s) => index >= s.from && index < s.to)?.name ?? null;
 
 /**
  * The visuals on screen during each block. A block with none of its own
@@ -141,14 +215,19 @@ export function stylesInEffect(song) {
   });
 }
 
-/** Start and end of each arrangement block, in seconds. */
+/**
+ * Start and end of each arrangement block, in seconds, laid end to end in
+ * arrangement order with its repeats. A song that loops or follows choices
+ * doesn't play in this order, but this is still where each block sits on
+ * its timeline, and the engine's song time jumps around it.
+ */
 export function blockTimes(song) {
   const byId = new Map(song.patterns.map((p) => [p.id, p]));
   const stepSeconds = 60 / song.bpm / 4;
   let t = 0;
   return song.arrangement.map((block) => {
     const start = t;
-    t += byId.get(block.pattern).length * stepSeconds;
+    t += byId.get(block.pattern).length * (block.repeat ?? 1) * stepSeconds;
     return { start, end: t };
   });
 }
@@ -165,6 +244,7 @@ export function defaultSong() {
     mix: { effects: [] },
     patterns: [pattern],
     arrangement: [newBlock(pattern.id)],
+    loop: null,
     look: { ...DEFAULT_LOOK },
   };
 }
@@ -285,7 +365,9 @@ export function normalizeSong(doc) {
   const patternIds = new Set(patterns.map((p) => p.id));
   if (patternIds.size !== patterns.length) throw new SongError('duplicate pattern id');
 
-  // Songs saved before blocks carried visuals stored bare pattern ids.
+  // Songs saved before blocks carried visuals stored bare pattern ids;
+  // songs saved before blocks had repeats, mutes, sections and follow
+  // choices get the defaults.
   const blockIds = new Set();
   const arrangement = array(doc.arrangement ?? [], LIMITS.arrangement, 'arrangement entries')
     .map((b) => (typeof b === 'string' ? newBlock(b) : b))
@@ -293,8 +375,25 @@ export function normalizeSong(doc) {
     .map((b) => {
       const blockId = typeof b.id === 'string' && ID.test(b.id) && !blockIds.has(b.id) ? b.id : newId();
       blockIds.add(blockId);
-      return { id: blockId, pattern: b.pattern, visuals: normalizeVisuals(b.visuals, newId), style: normalizeStyle(b.style) };
+      return {
+        id: blockId,
+        pattern: b.pattern,
+        visuals: normalizeVisuals(b.visuals, newId),
+        style: normalizeStyle(b.style),
+        repeat: int(b.repeat, 1, LIMITS.repeat, 1),
+        mute: [...new Set(Array.isArray(b.mute) ? b.mute : [])].filter((t) => trackIds.has(t)),
+        section: typeof b.section === 'string' && b.section.trim() ? b.section.trim().slice(0, LIMITS.sectionLength) : null,
+        follow: b.follow,
+      };
     });
+  // Follow choices can point anywhere in the arrangement, so they're
+  // checked once every block's id is settled.
+  for (const block of arrangement) {
+    const seen = new Set();
+    block.follow = array(block.follow ?? [], LIMITS.follow, 'follow choices')
+      .filter((f) => isObj(f) && (f.to === null || blockIds.has(f.to)) && !seen.has(f.to) && seen.add(f.to))
+      .map((f) => ({ to: f.to, weight: int(f.weight, 1, LIMITS.weight, 1) }));
+  }
 
   return {
     bpm: num(doc.bpm, ...LIMITS.bpm, 120),
@@ -302,6 +401,7 @@ export function normalizeSong(doc) {
     mix,
     patterns,
     arrangement,
+    loop: blockIds.has(doc.loop) ? doc.loop : null,
     look: normalizeStyle(doc.look, { complete: true }),
   };
 }

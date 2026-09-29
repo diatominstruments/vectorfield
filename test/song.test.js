@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultSong, normalizeSong, blockTimes, stylesInEffect, visualsInEffect, newBlock, newVisual, SongError } from '../shared/song.js';
+import {
+  defaultSong, normalizeSong, blockTimes, stylesInEffect, visualsInEffect, newBlock, newVisual, copyBlock, removeBlock,
+  nextBlock, playOrder, sections, SongError,
+} from '../shared/song.js';
 import { sampleSong } from './fixtures.js';
 
 test('a new song is a blank canvas', () => {
@@ -121,6 +124,99 @@ test('main mix effects are validated like track effects', () => {
   assert.equal(clean.mix.effects[0].params.mix, 1);
   song.mix.effects = [{ id: 'mono-synth', params: {} }];
   assert.throws(() => normalizeSong(song), SongError);
+});
+
+/** A song of `n` blocks, all playing its one pattern. */
+function blocks(n) {
+  const song = sampleSong();
+  const pid = song.patterns[0].id;
+  song.arrangement = Array.from({ length: n }, () => newBlock(pid));
+  return song;
+}
+
+test('songs saved before block options get the defaults', () => {
+  const song = sampleSong();
+  for (const b of song.arrangement) for (const key of ['repeat', 'mute', 'section', 'follow']) delete b[key];
+  delete song.loop;
+  const clean = normalizeSong(song);
+  assert.equal(clean.loop, null);
+  assert.deepEqual(
+    clean.arrangement.map(({ repeat, mute, section, follow }) => ({ repeat, mute, section, follow })),
+    [{ repeat: 1, mute: [], section: null, follow: [] }],
+  );
+});
+
+test('block options are cleaned', () => {
+  const song = blocks(2);
+  const [a, b] = song.arrangement;
+  const drums = song.tracks[0].id;
+  Object.assign(a, {
+    repeat: 99, mute: [drums, drums, 'ghost'], section: '  Chorus  ',
+    follow: [{ to: b.id, weight: 50 }, { to: b.id, weight: 1 }, { to: 'nowhere', weight: 1 }, { to: null, weight: 0 }],
+  });
+  b.section = '   ';
+  song.loop = 'nowhere';
+  const clean = normalizeSong(song);
+  const [ca, cb] = clean.arrangement;
+  assert.equal(ca.repeat, 16);
+  assert.deepEqual(ca.mute, [drums]);
+  assert.equal(ca.section, 'Chorus');
+  assert.deepEqual(ca.follow, [{ to: b.id, weight: 9 }, { to: null, weight: 1 }]);
+  assert.equal(cb.section, null);
+  assert.equal(clean.loop, null);
+
+  song.loop = b.id;
+  assert.equal(normalizeSong(song).loop, b.id);
+});
+
+test('repeats lengthen a block', () => {
+  const song = blocks(2);
+  song.bpm = 120;   // a 16-step bar is 2 s
+  song.arrangement[0].repeat = 3;
+  assert.deepEqual(blockTimes(song), [{ start: 0, end: 6 }, { start: 6, end: 8 }]);
+});
+
+test('the next block: in order, then the loop, or the end', () => {
+  const song = blocks(3);
+  assert.equal(nextBlock(song, 0), 1);
+  assert.equal(nextBlock(song, 2), -1);
+  song.loop = song.arrangement[1].id;
+  assert.equal(nextBlock(song, 2), 1);
+  assert.equal(playOrder(song), 'loops');
+});
+
+test('the next block: follow choices by weight', () => {
+  const song = blocks(3);
+  const [a, , c] = song.arrangement;
+  a.follow = [{ to: c.id, weight: 3 }, { to: null, weight: 1 }];
+  assert.equal(playOrder(song), 'varies');
+  assert.equal(nextBlock(song, 0, () => 0), 2);
+  assert.equal(nextBlock(song, 0, () => 0.74), 2);
+  assert.equal(nextBlock(song, 0, () => 0.76), -1);   // `null` ends the song, loop or not
+});
+
+test('removing a block takes the loop and follow choices leading to it', () => {
+  const song = blocks(3);
+  const [a, b, c] = song.arrangement;
+  song.loop = b.id;
+  a.follow = [{ to: b.id, weight: 1 }, { to: c.id, weight: 1 }];
+  removeBlock(song, 1);
+  assert.equal(song.loop, null);
+  assert.deepEqual(a.follow, [{ to: c.id, weight: 1 }]);
+  assert.deepEqual(normalizeSong(song), song);
+});
+
+test('sections run from one name to the next', () => {
+  const song = blocks(5);
+  song.arrangement[1].section = 'Verse';
+  song.arrangement[3].section = 'Chorus';
+  assert.deepEqual(sections(song), [
+    { name: null, from: 0, to: 1 },
+    { name: 'Verse', from: 1, to: 3 },
+    { name: 'Chorus', from: 3, to: 5 },
+  ]);
+  // A duplicate carries on its original's section instead of starting another.
+  assert.equal(copyBlock(song.arrangement[3]).section, null);
 });
 
 test('songs saved before the main mix get an empty one', () => {

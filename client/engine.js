@@ -1,5 +1,5 @@
 import { create, chain } from 'gloaming-instruments';
-import { blockTimes, sequencerOf } from '../shared/song.js';
+import { blockTimes, nextBlock, sequencerOf } from '../shared/song.js';
 import { BounceSim } from './bounce-sim.js';
 import { TubuleSim } from './tubule-sim.js';
 
@@ -19,7 +19,8 @@ const TUBULE_VELOCITY = 0.7;
  * rebuilding a track's chain only when its modules change.
  *
  * Events (via on()): 'state' when playback starts or stops, 'position'
- * { patternId, index, step } as each step becomes audible.
+ * { patternId, index, pass, step } as each step becomes audible — `pass`
+ * counts a block's repeats from 0.
  */
 export class Engine {
   constructor() {
@@ -138,8 +139,8 @@ export class Engine {
     await this.ctx.resume();
 
     this.cursor = from.patternId
-      ? { mode: 'pattern', patternId: from.patternId, index: 0, step: 0 }
-      : { mode: 'song', patternId: null, index: from.index ?? 0, step: 0 };
+      ? { mode: 'pattern', patternId: from.patternId, index: 0, pass: 0, step: 0 }
+      : { mode: 'song', patternId: null, index: from.index ?? 0, pass: 0, step: 0 };
     this.startIndex = this.cursor.index;
     this.nextTime = this.ctx.currentTime + 0.05;
     this.queue = [];         // note events waiting for their time; see #enqueue
@@ -185,11 +186,14 @@ export class Engine {
       const t = this.nextTime;
       const stepLength = 60 / this.song.bpm / STEPS_PER_BEAT;
       const stepped = new Set();
+      // Tracks muted for the whole song, or just for this block.
+      const blockMute = this.cursor.mode === 'song' ? this.song.arrangement[this.cursor.index].mute : [];
       for (const track of this.song.tracks) {
         const kind = sequencerOf(pattern, track.id);
-        if (kind === 'bounce') this.#bounceStep(pattern, track, t, stepLength);
-        else if (kind === 'tubules') stepped.add(this.#tubuleStep(pattern, track, t, stepLength));
-        else this.#gridStep(pattern, track, t, stepLength);
+        const muted = track.mute || blockMute.includes(track.id);
+        if (kind === 'bounce') this.#bounceStep(pattern, track, muted, t, stepLength);
+        else if (kind === 'tubules') stepped.add(this.#tubuleStep(pattern, track, muted, t, stepLength));
+        else if (!muted) this.#gridStep(pattern, track, t, stepLength);
       }
       // Tubules hold their notes, so any left sounding from another pattern
       // (or a track that has changed sequencer) must let go.
@@ -197,7 +201,8 @@ export class Engine {
         if (entry.voices?.size && !stepped.has(key)) this.#silenceTubules(entry, t);
       }
       this.#flush(t + stepLength);
-      this.heard.push({ time: t, patternId: pattern.id, index: this.cursor.index, step: this.cursor.step });
+      const { index, pass, step } = this.cursor;
+      this.heard.push({ time: t, patternId: pattern.id, index, pass, step });
 
       this.nextTime += stepLength;
       this.cursor.step++;
@@ -205,15 +210,23 @@ export class Engine {
     }
   }
 
+  // The end of a pattern: in the arrangement, its block's next repeat, or
+  // the block after it (an index past the end when the song is over).
   #advance() {
-    this.cursor.step = 0;
-    if (this.cursor.mode === 'song') this.cursor.index++;
+    const cursor = this.cursor;
+    cursor.step = 0;
+    if (cursor.mode !== 'song') return;
+    const block = this.song.arrangement[cursor.index];
+    if (block && ++cursor.pass < block.repeat) return;
+    cursor.pass = 0;
+    const next = block ? nextBlock(this.song, cursor.index) : -1;
+    cursor.index = next < 0 ? this.song.arrangement.length : next;
   }
 
   // Step grid: the track's notes that start on this step.
   #gridStep(pattern, track, t, stepLength) {
     const live = this.live.get(track.id);
-    if (!live || track.mute) return;
+    if (!live) return;
     for (const n of pattern.notes[track.id] ?? []) {
       if (n.step === this.cursor.step) this.#queueOn(t, live.instrument, n.note, n.velocity, n.length * stepLength);
     }
@@ -223,7 +236,7 @@ export class Engine {
   // wall hit at the moment it happens (or on the next grid line, when
   // quantized). The balls live for the whole playback, so they carry on
   // from where they were the next time the pattern comes round.
-  #bounceStep(pattern, track, t, stepLength) {
+  #bounceStep(pattern, track, muted, t, stepLength) {
     const config = pattern.bounce[track.id];
     const key = simKey(pattern.id, track.id, 'bounce');
     let entry = this.sims.get(key);
@@ -244,7 +257,7 @@ export class Engine {
     while (entry.hits.length && entry.hits[0].time < keepFrom) entry.hits.shift();
 
     // A muted track's balls keep moving; they just don't sound.
-    const live = track.mute ? null : this.live.get(track.id);
+    const live = muted ? null : this.live.get(track.id);
     for (const hit of hits) {
       let time = t + hit.at * beat;
       if (config.quantize) {
@@ -263,7 +276,7 @@ export class Engine {
   // into plays its notes for the set length. Tubules sounding the same
   // note share it. Like the balls, they live for the whole playback.
   // Returns the entry's key.
-  #tubuleStep(pattern, track, t, stepLength) {
+  #tubuleStep(pattern, track, muted, t, stepLength) {
     const config = pattern.tubules[track.id];
     const key = simKey(pattern.id, track.id, 'tubules');
     let entry = this.sims.get(key);
@@ -274,7 +287,7 @@ export class Engine {
     entry.sim.sync(config);
 
     // A muted track's tubules keep growing; they just don't sound.
-    const instrument = track.mute ? null : this.live.get(track.id)?.instrument ?? null;
+    const instrument = muted ? null : this.live.get(track.id)?.instrument ?? null;
     if (instrument !== entry.instrument) {
       this.#silenceTubules(entry, t);
       entry.instrument = instrument;
@@ -423,7 +436,8 @@ export class Engine {
     if (!pos) return times[this.startIndex]?.start ?? 0;
     const stepLength = 60 / this.song.bpm / STEPS_PER_BEAT;
     const since = Math.min(stepLength, Math.max(0, this.ctx.currentTime - pos.time));
-    return (times[pos.index]?.start ?? 0) + pos.step * stepLength + since;
+    const length = this.song.patterns.find((p) => p.id === pos.patternId)?.length ?? 0;
+    return (times[pos.index]?.start ?? 0) + (pos.pass * length + pos.step) * stepLength + since;
   }
 
   /** Play one note now, for trying sounds while editing. */
