@@ -480,6 +480,9 @@ input[type=range].centered::-moz-range-progress { background: transparent; }
 .viz-card.removing strong { text-decoration: line-through; color: var(--muted); }
 .viz-card.removing em { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
 .viz-block.removing { text-decoration: line-through; opacity: 0.5; border-style: dashed; }
+/* Needs 3D, which this browser can't do. */
+.viz-card.unavailable { background: var(--panel); filter: grayscale(1); }
+.viz-card.unavailable em { color: var(--muted); background: var(--panel-2); }
 .viz-card em {
   justify-self: start; margin-top: 4px; font-style: normal; font-size: 11px; font-weight: 600;
   color: hsl(var(--hue) var(--tint-text)); background: hsl(var(--hue) var(--tint-line) / 0.35); border-radius: 999px; padding: 1px 8px;

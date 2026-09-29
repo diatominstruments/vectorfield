@@ -6,6 +6,7 @@ import { VISUAL_LIMITS } from '../../shared/visuals.js';
 import { VisualPanel, LookPanel, vizLabel } from './visual-config.js';
 import { VisualCanvas, songTimeline } from './visual-canvas.js';
 import { fmtTime } from './song-view.js';
+import { NO_3D_HINT, has3D, needs3D } from '../three.js';
 
 /** The song as it will be once the open visual browser's picks are saved. */
 function previewDoc(doc, browse) {
@@ -220,6 +221,7 @@ function VisualBrowser({ browse, added, limit, onChange, onPlay, onSave, onCance
           <span class="muted">
             ${summary ? ` ${summary}` : ' Pick visuals to add, or click a highlighted one to remove it. The preview shows the result as you go.'}
             ${full && ` · a block holds up to ${limit}`}
+            ${!has3D && ` · ${NO_3D_HINT}`}
           </span>
         </div>
         <button class="ghost" onClick=${onPlay} title="Play from this block, to see the visuals move">▶ Play</button>
@@ -235,15 +237,18 @@ function VisualBrowser({ browse, added, limit, onChange, onPlay, onSave, onCance
               const order = picks.indexOf(id);
               const picked = order >= 0;
               const selected = (onBlock && !removing) || picked;
+              // Can't be added without 3D, but one already on the block can still come off.
+              const unavailable = needs3D(id) && !onBlock;
               return html`
                 <button key=${id} aria-pressed=${Boolean(selected)}
-                  class=${`viz-card ${picked ? 'picked' : ''} ${onBlock ? 'added' : ''} ${removing ? 'removing' : ''}`}
-                  disabled=${!selected && !removing && full} onClick=${() => toggle(id, onBlock)}
-                  title=${onBlock ? (removing ? 'Will be removed when you save. Click to keep it.' : 'On this block. Click to remove it.') : undefined}>
+                  class=${`viz-card ${picked ? 'picked' : ''} ${onBlock ? 'added' : ''} ${removing ? 'removing' : ''} ${unavailable ? 'unavailable' : ''}`}
+                  disabled=${unavailable || (!selected && !removing && full)} onClick=${() => toggle(id, onBlock)}
+                  title=${unavailable ? NO_3D_HINT : onBlock ? (removing ? 'Will be removed when you save. Click to keep it.' : 'On this block. Click to remove it.') : undefined}>
                   <strong>${label}</strong>
                   ${description && html`<span>${description}</span>`}
                   ${onBlock > 0 && html`<em>${removing ? 'Will be removed' : `✓ On this block${onBlock > 1 ? ` ×${onBlock}` : ''}`}</em>`}
                   ${picked && html`<i aria-label=${`Pick ${order + 1}`}>${order + 1}</i>`}
+                  ${unavailable && html`<em class="needs-3d">Needs 3D</em>`}
                 </button>`;
             })}
           </div>

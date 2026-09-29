@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'preact/hooks';
 import { GloamingKit } from 'gloaming-kit';
 import { html } from '../lib.js';
+import { THREE, has3D } from '../three.js';
 import { blockTimes, stylesInEffect, visualsInEffect } from '../../shared/song.js';
 
 /**
@@ -39,7 +40,7 @@ export function VisualCanvas({ engine, timeline, look, holdTime, class: classNam
 
   useEffect(() => {
     const ctx = engine.ensureContext();
-    const kit = new GloamingKit({ canvas: canvasRef.current, audioContext: ctx, monitor: false });
+    const kit = new GloamingKit({ canvas: canvasRef.current, audioContext: ctx, monitor: false, three: THREE, enable3D: has3D });
     kit.load({
       node: engine.output,
       clock: {

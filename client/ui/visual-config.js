@@ -1,5 +1,6 @@
 import { BANDS, DEFAULT_TRIGGERS, catalog, describe } from 'gloaming-kit';
 import { html } from '../lib.js';
+import { NO_3D_HINT, needs3D } from '../three.js';
 import { STYLE_KEYS, DEFAULT_LOOK } from '../../shared/visuals.js';
 
 // ---- names -------------------------------------------------------------------
@@ -204,13 +205,17 @@ export function VisualPanel({ visual, blockLabel, onChange, onRemove, onMove, ca
           ${!info && html`<option value=${visual.viz}>Unknown (${visual.viz})</option>`}
           ${catalog().map((group) => html`
             <optgroup label=${group.label}>
-              ${group.visualizations.map((d) => html`<option value=${d.id}>${d.label}</option>`)}
+              ${group.visualizations.map((d) => html`
+                <option value=${d.id} disabled=${needs3D(d.id) && d.id !== visual.viz}>${d.label}${needs3D(d.id) ? ' (needs 3D)' : ''}</option>`)}
             </optgroup>`)}
         </select>
       </label>
       ${info?.description && html`<p class="hint muted">${info.description}</p>`}
 
       ${!info && html`<p class="error">This visualization isn't in the installed gloaming-kit.</p>`}
+      ${needs3D(visual.viz) && html`<p class="hint muted">${NO_3D_HINT} ${info.fallback
+        ? `Showing ${vizLabel(info.fallback)} in its place.`
+        : 'It has no 2D version, so nothing is drawn in its place.'}</p>`}
 
       ${inputs.length > 0 && html`
         <h4>Driven by</h4>
