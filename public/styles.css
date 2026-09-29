@@ -413,8 +413,8 @@ input[type=range].centered::-moz-range-progress { background: transparent; }
 .arrangement .bar { font: 11px ui-monospace, Menlo, monospace; color: var(--muted); text-align: right; padding-top: 11px; }
 .arrangement .block {
   position: relative; overflow: hidden; display: flex; align-items: flex-start; gap: 8px; text-align: left;
-  /* height follows length, repeats included: a 16-step bar is 44px, up to 8 bars' worth */
-  height: clamp(36px, calc(var(--length) / 16 * 44px), 352px);
+  /* height follows the pattern's length: a 16-step bar is 44px */
+  height: max(36px, calc(var(--length) / 16 * 44px));
   background: hsl(var(--hue) var(--tint-fill)); border: 1px solid hsl(var(--hue) var(--tint-line)); padding: 9px 10px;
 }
 .arrangement .block:hover { border-color: hsl(var(--hue) var(--tint-bright)); }
@@ -425,8 +425,17 @@ input[type=range].centered::-moz-range-progress { background: transparent; }
 .block-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding-top: 3px; }
 .block-actions button { padding: 3px 8px; font-size: 13px; }
 .block-actions select { padding: 3px 6px; font-size: 13px; max-width: 160px; margin: 0 4px; }
-.block-actions button.active { border-color: var(--line); background: var(--panel-2); }
+/* Opens the block's options panel, so it looks like a control, not a one-off action. */
+.block-actions .disclosure-button { display: inline-flex; align-items: center; gap: 6px; margin: 0 2px; }
+.disclosure-button .chevron { font-size: 10px; color: var(--muted); transition: transform 0.15s; }
+.disclosure-button.active { border-color: hsl(var(--hue) var(--tint-line)); background: hsl(var(--hue) var(--tint-fill)); }
+.disclosure-button.active .chevron { transform: rotate(180deg); color: var(--fg); }
 .song-view .empty { padding: 32px; text-align: center; border: 1px dashed var(--line); border-radius: var(--radius); }
+/* One pip per repeat along the block's foot; while playing, the current pass is lit. */
+.arrangement .repeats { position: absolute; left: 10px; right: 10px; bottom: 5px; display: flex; gap: 3px; pointer-events: none; }
+.arrangement .repeats i { flex: 1; max-width: 24px; height: 3px; border-radius: 2px; background: hsl(var(--hue) var(--tint-line)); }
+.arrangement .repeats i.done { background: hsl(var(--hue) var(--tint)); }
+.arrangement .repeats i.now { background: hsl(var(--hue) var(--tint-bright)); box-shadow: 0 0 4px hsl(var(--hue) var(--tint-bright)); }
 .arrangement .badges { display: flex; flex-wrap: wrap; gap: 4px; position: relative; }
 .arrangement .badges .badge { color: hsl(var(--hue) var(--tint-text)); border-color: hsl(var(--hue) var(--tint-line)); font: 11px ui-monospace, Menlo, monospace; }
 .arrangement .section-name {

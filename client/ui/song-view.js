@@ -63,11 +63,11 @@ export function SongView({ store, engine, onEditPattern }) {
               bar += (p.length / 16) * block.repeat;
               return html`
                 <li key=${block.id} class=${`${now ? 'now' : ''} ${open ? 'open' : ''}`}
-                  style=${`--hue: ${hue(pi)}; --length: ${p.length * block.repeat}`}>
+                  style=${`--hue: ${hue(pi)}; --length: ${p.length}`}>
                   ${block.section && html`<span class="section-name">${block.section}</span>`}
                   <span class="bar" title=${`Starts at bar ${start}`}>${start}</span>
                   <button class="block" onClick=${() => onEditPattern(block.pattern)} title="Edit this pattern">
-                    ${now && html`<span class="progress" style=${`height: ${((position.pass * p.length + position.step + 1) / (p.length * block.repeat)) * 100}%`}></span>`}
+                    ${now && html`<span class="progress" style=${`height: ${((position.step + 1) / p.length) * 100}%`}></span>`}
                     <span class="name">${p.name}</span>
                     <span class="badges">
                       ${block.repeat > 1 && html`<span class="badge" title=${`Plays ${block.repeat} times`}>×${block.repeat}</span>`}
@@ -76,6 +76,11 @@ export function SongView({ store, engine, onEditPattern }) {
                       ${block.follow.length > 0 && html`<span class="badge" title="What plays next is picked at random">⤳ random</span>`}
                     </span>
                     <span class="length">${p.length} steps</span>
+                    ${block.repeat > 1 && html`
+                      <span class="repeats" aria-hidden="true">
+                        ${Array.from({ length: block.repeat }, (_, r) => html`
+                          <i class=${now && r === position.pass ? 'now' : now && r < position.pass ? 'done' : ''}></i>`)}
+                      </span>`}
                   </button>
                   <div class="block-actions">
                     <button class="ghost" onClick=${() => engine.play({ index: i })} title="Play from here">▶</button>
@@ -85,8 +90,8 @@ export function SongView({ store, engine, onEditPattern }) {
                       onChange=${(e) => { const pid = e.target.value; edit((a) => { a[i].pattern = pid; }); }}>
                       ${doc.patterns.map((q) => html`<option value=${q.id}>${q.name}</option>`)}
                     </select>
-                    <button class=${`ghost ${open ? 'active' : ''}`} aria-expanded=${open}
-                      onClick=${() => setOpenId(open ? null : block.id)}>Options</button>
+                    <button class=${`disclosure-button ${open ? 'active' : ''}`} aria-expanded=${open}
+                      onClick=${() => setOpenId(open ? null : block.id)}>Options <span class="chevron" aria-hidden="true">▾</span></button>
                     <button class="ghost" disabled=${full} onClick=${() => edit((a) => { a.splice(i + 1, 0, copyBlock(block)); })}
                       title="Repeat this block, visuals included, right after itself">Duplicate</button>
                     <button class="ghost" disabled=${uses < 2 || doc.patterns.length >= LIMITS.patterns} onClick=${() => makeUnique(i)}
