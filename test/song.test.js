@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   defaultSong, normalizeSong, blockTimes, stylesInEffect, visualsInEffect, newBlock, newVisual, copyBlock, removeBlock,
-  nextBlock, playOrder, sections, SongError,
+  nextBlock, playOrder, sections, automationValue, LIMITS, SongError,
 } from '../shared/song.js';
 import { sampleSong } from './fixtures.js';
 
@@ -223,4 +223,38 @@ test('songs saved before the main mix get an empty one', () => {
   const song = sampleSong();
   delete song.mix;
   assert.deepEqual(normalizeSong(song).mix, { effects: [] });
+});
+
+test('automation lanes are validated against their track\'s instrument', () => {
+  const song = sampleSong();
+  const [drums, bass] = song.tracks;
+  const p = song.patterns[0];
+  p.automation = [
+    { id: 'a1', track: bass.id, param: 'cutoff', points: [{ step: 8, value: 1e9 }, { step: 0, value: 200 }, { step: 8, value: 300 }, { step: 99, value: 1 }, { step: 1.5, value: 1 }] },
+    { id: 'a2', track: bass.id, param: 'cutoff', points: [] },   // same param twice
+    { id: 'a3', track: drums.id, param: 'cutoff', points: [] },  // not a drum-synth param
+    { id: 'a4', track: 'ghost', param: 'gain', points: [] },     // track gone
+  ];
+  const clean = normalizeSong(song).patterns[0].automation;
+  assert.deepEqual(clean, [
+    { id: 'a1', track: bass.id, param: 'cutoff', points: [{ step: 0, value: 200 }, { step: 8, value: 16000 }] },
+  ]);
+
+  p.automation = Array.from({ length: LIMITS.automationLanes + 1 }, (_, i) => ({ id: `x${i}`, track: bass.id, param: 'cutoff', points: [] }));
+  assert.throws(() => normalizeSong(song), SongError);
+});
+
+test('patterns saved before automation get none', () => {
+  const song = sampleSong();
+  delete song.patterns[0].automation;
+  assert.deepEqual(normalizeSong(song).patterns[0].automation, []);
+});
+
+test('automation runs in straight lines between points and holds at the ends', () => {
+  const points = [{ step: 4, value: 0 }, { step: 8, value: 1 }, { step: 12, value: 0.5 }];
+  assert.equal(automationValue([], 3), null);
+  assert.equal(automationValue(points, 0), 0);
+  assert.equal(automationValue(points, 6), 0.5);
+  assert.equal(automationValue(points, 10), 0.75);
+  assert.equal(automationValue(points, 15.5), 0.5);
 });

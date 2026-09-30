@@ -1,12 +1,13 @@
 import { useRef, useState } from 'preact/hooks';
 import { registry } from 'gloaming-instruments';
 import { html, hue, noteName, isBlackKey, useEngineEvent } from '../lib.js';
-import { LIMITS, PATTERN_LENGTHS, newPattern, newId, sequencerOf } from '../../shared/song.js';
+import { LIMITS, PATTERN_LENGTHS, newPattern, newId, sequencerOf, pruneAutomation } from '../../shared/song.js';
 import { defaultBounce } from '../../shared/bounce.js';
 import { defaultTubules } from '../../shared/tubules.js';
 import { plural } from './song-view.js';
 import { BounceEditor } from './bounce-editor.js';
 import { TubuleEditor } from './tubule-editor.js';
+import { AutomationLanes } from './automation.js';
 
 const VISIBLE_OCTAVES = 2;
 
@@ -101,7 +102,8 @@ export function PatternsView({ store, engine, pattern, onSelect }) {
                     title=${`${plural(steps, 'step')}`}>${label}</button>`)}
               </div>`}
             <${StepGrid} key=${`${pattern.id}:${track.id}`} store=${store} engine=${engine} pattern=${pattern} track=${track}
-              trackIndex=${doc.tracks.indexOf(track)} newLength=${newLength} />`}`}
+              trackIndex=${doc.tracks.indexOf(track)} newLength=${newLength} />`}
+            <${AutomationLanes} store=${store} engine=${engine} pattern=${pattern} track=${track} />`}
       </div>
     </section>
   `;
@@ -129,12 +131,14 @@ function PatternHeader({ store, pattern, onSelect }) {
     onSelect(next?.id ?? null);
   };
 
-  // Shortening drops notes past the new end; lengthening keeps everything.
-  const setLength = (length) => edit((p) => {
+  // Shortening drops notes and automation points past the new end;
+  // lengthening keeps everything.
+  const setLength = (length) => edit((p, d) => {
     p.length = length;
     for (const [tid, notes] of Object.entries(p.notes)) {
       p.notes[tid] = notes.filter((n) => n.step < length).map((n) => ({ ...n, length: Math.min(n.length, length - n.step) }));
     }
+    pruneAutomation(d);
   });
 
   return html`

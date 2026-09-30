@@ -1,5 +1,5 @@
 import { create, chain, Sampler } from 'gloaming-instruments';
-import { blockTimes, nextBlock, sequencerOf } from '../shared/song.js';
+import { automationValue, blockTimes, nextBlock, sequencerOf } from '../shared/song.js';
 import { BounceSim } from './bounce-sim.js';
 import { TubuleSim } from './tubule-sim.js';
 
@@ -10,12 +10,14 @@ const LOOKAHEAD = 0.12;   // seconds of audio scheduled ahead of the clock
 const TICK_MS = 25;
 const STEPS_PER_BEAT = 4;
 const TUBULE_VELOCITY = 0.7;
+const AUTOMATION_RESOLUTION = 4;   // automation values set per step
 
 /**
  * Engine — turns a song document into sound. Owns the AudioContext, one
  * live instrument → effects → gain chain per track, the main mix's effects
  * after them (master → mix effects → limiter), and a lookahead
- * scheduler that plays either one pattern on loop or the arrangement.
+ * scheduler that plays either one pattern on loop or the arrangement, and
+ * sweeps params along the playing pattern's automation lanes.
  *
  * The song document stays the source of truth: after any edit, sync(song)
  * brings the live graph in line, changing params in place where it can and
@@ -34,6 +36,7 @@ export class Engine {
     this.listeners = new Map();
     this.playing = false;
     this.position = null;
+    this.automated = new Map();   // track id -> params automation has moved off the song's values
   }
 
   on(event, fn) {
@@ -91,7 +94,8 @@ export class Engine {
       } else {
         const key = effectsKey(track);
         if (key !== live.key) this.#rewireEffects(live, track);
-        updateParams(live.instrument, track.instrument.params);
+        // Params under automation follow their lane, not the song's value.
+        updateParams(live.instrument, track.instrument.params, this.automated.get(track.id));
         track.effects.forEach((e, i) => updateParams(live.effects[i], e.params));
       }
       live.gain.gain.setTargetAtTime(track.mute ? 0 : track.gain, this.ctx.currentTime, 0.01);
@@ -163,6 +167,10 @@ export class Engine {
     cancelAnimationFrame(this.raf);
     const now = this.ctx.currentTime;
     for (const live of this.live.values()) live.instrument.allNotesOff(now);
+    // Automation is scheduled up to nextTime, so the song's values go back
+    // after that or they'd be overwritten.
+    this.#restoreParams(Math.max(now, this.nextTime));
+    this.automated = new Map();
     this.playing = false;
     this.position = null;
     this.emit('position', null);
@@ -203,6 +211,7 @@ export class Engine {
       for (const [key, entry] of this.sims) {
         if (entry.voices?.size && !stepped.has(key)) this.#silenceTubules(entry, t);
       }
+      this.#automate(pattern, t, stepLength);
       this.#flush(t + stepLength);
       const { index, pass, step } = this.cursor;
       this.heard.push({ time: t, patternId: pattern.id, index, pass, step });
@@ -224,6 +233,39 @@ export class Engine {
     cursor.pass = 0;
     const next = block ? nextBlock(this.song, cursor.index) : -1;
     cursor.index = next < 0 ? this.song.arrangement.length : next;
+  }
+
+  // Automation: each lane with points sets its param a few times through
+  // the step, following its line; the library smooths between. A param
+  // automated until now but not in this pattern goes back to the song's
+  // value.
+  #automate(pattern, t, stepLength) {
+    const automated = new Map();
+    for (const lane of pattern.automation ?? []) {
+      const live = this.live.get(lane.track);
+      if (!lane.points.length || !live || !(lane.param in live.instrument.constructor.params)) continue;
+      for (let i = 0; i < AUTOMATION_RESOLUTION; i++) {
+        const at = i / AUTOMATION_RESOLUTION;
+        live.instrument.setParam(lane.param, automationValue(lane.points, this.cursor.step + at), t + at * stepLength);
+      }
+      if (!automated.has(lane.track)) automated.set(lane.track, new Set());
+      automated.get(lane.track).add(lane.param);
+    }
+    this.#restoreParams(t, automated);
+    this.automated = automated;
+  }
+
+  // Put automated params back to the song's values, except those in `keep`.
+  #restoreParams(time, keep = new Map()) {
+    for (const [trackId, params] of this.automated) {
+      const track = this.song.tracks.find((tr) => tr.id === trackId);
+      const live = this.live.get(trackId);
+      if (!track || !live) continue;
+      for (const param of params) {
+        if (keep.get(trackId)?.has(param) || !(param in live.instrument.constructor.params)) continue;
+        live.instrument.setParam(param, track.instrument.params[param], time);
+      }
+    }
   }
 
   // Step grid: the track's notes that start on this step.
@@ -467,9 +509,9 @@ export class Engine {
 /** A chain's module ids, to tell a param change from a change of modules. */
 const effectsKey = (holder) => holder.effects.map((e) => e.id).join(',');
 
-function updateParams(module, params) {
+function updateParams(module, params, skip) {
   for (const [name, value] of Object.entries(params)) {
-    if (module.params[name] !== value) module.setParam(name, value);
+    if (module.params[name] !== value && !skip?.has(name)) module.setParam(name, value);
   }
 }
 

@@ -19,7 +19,9 @@ export { SongError };
  *                  notes: { [trackId]: [{ step, note, velocity, length }] },
  *                  sequencers: { [trackId]: 'bounce' | 'tubules' },   // absent = steps
  *                  bounce: { [trackId]: { ... } },        // see bounce.js
- *                  tubules: { [trackId]: { ... } } }],    // see tubules.js
+ *                  tubules: { [trackId]: { ... } },       // see tubules.js
+ *                  automation: [{ id, track, param,
+ *                                 points: [{ step, value }] }] }],
  *     arrangement: [{ id, pattern, visuals, style,     // blocks in play order
  *                     repeat, mute: [trackId], section,
  *                     follow: [{ to: blockId | null, weight }] }],
@@ -30,6 +32,12 @@ export { SongError };
  * Steps are sixteenth notes. `length` is in steps. Module entries use the
  * instrument library's own `{ id, version, params }` form, so any instrument
  * the library adds is storable here without changes.
+ *
+ * A pattern's automation lanes each sweep one number param of a track's
+ * instrument through the pattern: `points` in step order, `value` in the
+ * param's own units, with straight lines between them. Before the first
+ * point and after the last the value holds; a lane with no points leaves
+ * the param alone.
  *
  * An arrangement block plays one pattern; the same pattern may appear in any
  * number of blocks. A block also carries the visualizations shown while it
@@ -53,6 +61,8 @@ export const LIMITS = Object.freeze({
   patterns: 64,
   arrangement: 512,
   notesPerTrack: 1024,   // per pattern
+  automationLanes: 4,    // per pattern
+  automationPoints: 64,  // per lane
   nameLength: 60,
   sectionLength: 40,
   repeat: 16,            // times a block plays its pattern
@@ -100,11 +110,37 @@ export const SEQUENCERS = ['steps', 'bounce', 'tubules'];
  * forth never loses work.
  */
 export function newPattern(name, length = 16) {
-  return { id: newId(), name, length, notes: {}, sequencers: {}, bounce: {}, tubules: {} };
+  return { id: newId(), name, length, notes: {}, sequencers: {}, bounce: {}, tubules: {}, automation: [] };
 }
 
 /** Which sequencer a track uses in a pattern. */
 export const sequencerOf = (pattern, trackId) => pattern.sequencers[trackId] ?? 'steps';
+
+/**
+ * The instrument params an automation lane can sweep: numbers the library
+ * hasn't marked as rebuilding part of the graph. Returns [name, spec] pairs.
+ */
+export function automatableParams(M) {
+  return Object.entries(M.params).filter(([, spec]) => spec.type === 'number' && spec.automatable !== false);
+}
+
+/**
+ * A lane's value at `step` (fractional steps are fine): straight lines
+ * between points, held flat before the first and after the last. Null for
+ * a lane with no points.
+ */
+export function automationValue(points, step) {
+  if (!points.length) return null;
+  if (step <= points[0].step) return points[0].value;
+  for (let i = 1; i < points.length; i++) {
+    const b = points[i];
+    if (step <= b.step) {
+      const a = points[i - 1];
+      return a.value + ((b.value - a.value) * (step - a.step)) / (b.step - a.step);
+    }
+  }
+  return points.at(-1).value;
+}
 
 export function newBlock(patternId, visuals = []) {
   return { id: newId(), pattern: patternId, visuals, style: null, repeat: 1, mute: [], section: null, follow: [] };
@@ -313,6 +349,44 @@ function normalizeSequencers(p, trackIds) {
   return { sequencers, bounce, tubules };
 }
 
+// Songs saved before patterns had automation have none. A lane goes if its
+// track has gone, or its param isn't one the track's instrument can sweep
+// (the instrument was changed); a second lane on the same param goes too.
+// Points are kept in step order, one per step, inside the pattern.
+function normalizeAutomation(lanes, length, instrumentOf) {
+  const seen = new Set();
+  const laneIds = new Set();
+  return array(lanes ?? [], LIMITS.automationLanes, 'automation lanes')
+    .filter((lane) => isObj(lane) && instrumentOf.has(lane.track))
+    .map((lane) => {
+      const M = instrumentOf.get(lane.track);
+      const spec = automatableParams(M).find(([n]) => n === lane.param)?.[1];
+      const key = `${lane.track}:${lane.param}`;
+      if (!spec || seen.has(key)) return null;
+      seen.add(key);
+      const laneId = typeof lane.id === 'string' && ID.test(lane.id) && !laneIds.has(lane.id) ? lane.id : newId();
+      laneIds.add(laneId);
+      const steps = new Set();
+      const points = array(lane.points ?? [], LIMITS.automationPoints, 'automation points')
+        .filter((pt) => isObj(pt) && Number.isInteger(pt.step) && pt.step >= 0 && pt.step <= length)
+        .sort((a, b) => a.step - b.step)
+        .filter((pt) => !steps.has(pt.step) && steps.add(pt.step))
+        .map((pt) => ({ step: pt.step, value: num(pt.value, spec.min, spec.max, spec.default) }));
+      return { id: laneId, track: lane.track, param: lane.param, points };
+    })
+    .filter(Boolean);
+}
+
+/**
+ * Bring every pattern's automation back in line after an edit that can
+ * strand it: a track deleted, an instrument changed, a pattern shortened.
+ * Mutates `doc`.
+ */
+export function pruneAutomation(doc) {
+  const instrumentOf = new Map(doc.tracks.map((t) => [t.id, registry.get(t.instrument.id)]));
+  for (const p of doc.patterns) p.automation = normalizeAutomation(p.automation, p.length, instrumentOf);
+}
+
 /**
  * Validate and clean a song document. Structural problems (wrong shapes, bad
  * ids, unknown modules, over the limits) throw SongError; out-of-range values
@@ -339,6 +413,7 @@ export function normalizeSong(doc) {
       .map((e) => module(e, 'effect')),
   };
   const trackIds = new Set(tracks.map((t) => t.id));
+  const instrumentOf = new Map(tracks.map((t) => [t.id, registry.get(t.instrument.id)]));
   if (trackIds.size !== tracks.length) throw new SongError('duplicate track id');
 
   const patterns = array(doc.patterns, LIMITS.patterns, 'patterns').map((p, i) => {
@@ -357,7 +432,8 @@ export function normalizeSong(doc) {
         }));
     }
     const { sequencers, bounce, tubules } = normalizeSequencers(p, trackIds);
-    return { id: id(p.id, 'pattern'), name: name(p.name, `Pattern ${i + 1}`), length, notes, sequencers, bounce, tubules };
+    const automation = normalizeAutomation(p.automation, length, instrumentOf);
+    return { id: id(p.id, 'pattern'), name: name(p.name, `Pattern ${i + 1}`), length, notes, sequencers, bounce, tubules, automation };
   });
   const patternIds = new Set(patterns.map((p) => p.id));
   if (patternIds.size !== patterns.length) throw new SongError('duplicate pattern id');

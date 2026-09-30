@@ -36,11 +36,12 @@ export function formatValue(spec, v) {
   }
 }
 
-// Sliders run 0..1000 and map through the schema's scale hint.
-const toValue = (spec, x) => (spec.scale === 'log'
+/** A number param's value at `x` along its range (0..1), following the schema's scale hint. */
+export const toValue = (spec, x) => (spec.scale === 'log'
   ? spec.min * (spec.max / spec.min) ** x
   : spec.min + (spec.max - spec.min) * x);
-const toSlider = (spec, v) => (spec.scale === 'log'
+/** Where a value sits along its param's range, 0..1: the inverse of toValue. */
+export const toSlider = (spec, v) => (spec.scale === 'log'
   ? Math.log(v / spec.min) / Math.log(spec.max / spec.min)
   : (v - spec.min) / (spec.max - spec.min));
 
