@@ -240,7 +240,11 @@ test('automation lanes are validated against their track\'s instrument', () => {
     { id: 'a1', track: bass.id, param: 'cutoff', points: [{ step: 0, value: 200 }, { step: 8, value: 16000 }] },
   ]);
 
-  p.automation = Array.from({ length: LIMITS.automationLanes + 1 }, (_, i) => ({ id: `x${i}`, track: bass.id, param: 'cutoff', points: [] }));
+  // The limit is per track: each of two tracks may have a full set.
+  const lanes = (track, params) => params.map((param, i) => ({ id: `${param}${i}`.toLowerCase(), track: track.id, param, points: [] }));
+  p.automation = [...lanes(bass, ['cutoff', 'resonance', 'sub', 'glide']), ...lanes(drums, ['kickTune', 'kickPunch', 'kickDecay', 'kickLevel'])];
+  assert.equal(normalizeSong(song).patterns[0].automation.length, 2 * LIMITS.automationLanes);
+  p.automation.push(...lanes(bass, ['attack']));
   assert.throws(() => normalizeSong(song), SongError);
 });
 

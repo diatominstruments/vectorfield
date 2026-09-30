@@ -61,7 +61,7 @@ export const LIMITS = Object.freeze({
   patterns: 64,
   arrangement: 512,
   notesPerTrack: 1024,   // per pattern
-  automationLanes: 4,    // per pattern
+  automationLanes: 4,    // per track, per pattern
   automationPoints: 64,  // per lane
   nameLength: 60,
   sectionLength: 40,
@@ -356,8 +356,15 @@ function normalizeSequencers(p, trackIds) {
 function normalizeAutomation(lanes, length, instrumentOf) {
   const seen = new Set();
   const laneIds = new Set();
-  return array(lanes ?? [], LIMITS.automationLanes, 'automation lanes')
+  const perTrack = new Map();
+  return array(lanes ?? [], LIMITS.automationLanes * LIMITS.tracks, 'automation lanes')
     .filter((lane) => isObj(lane) && instrumentOf.has(lane.track))
+    .filter((lane) => {
+      const count = (perTrack.get(lane.track) ?? 0) + 1;
+      if (count > LIMITS.automationLanes) throw new SongError(`too many automation lanes on one track (max ${LIMITS.automationLanes})`);
+      perTrack.set(lane.track, count);
+      return true;
+    })
     .map((lane) => {
       const M = instrumentOf.get(lane.track);
       const spec = automatableParams(M).find(([n]) => n === lane.param)?.[1];

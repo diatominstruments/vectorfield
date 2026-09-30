@@ -30,35 +30,33 @@ function laneParams(track) {
 }
 
 /**
- * The pattern's automation lanes, under its sequencer. Each lane sweeps one
- * instrument param of one track through the pattern along a line through
- * its points; see song.js.
+ * The selected track's automation lanes in the pattern, under its
+ * sequencer. Each lane sweeps one of the track's instrument params through
+ * the pattern along a line through its points; see song.js.
  */
 export function AutomationLanes({ store, engine, pattern, track }) {
-  const { doc } = store;
-  const lanes = pattern.automation;
-  const used = new Set(lanes.map((l) => `${l.track}:${l.param}`));
-
-  // A new lane starts on the track being edited, on its first free param
-  // (or any track's, if that one's are all taken).
-  const candidate = [track, ...doc.tracks.filter((t) => t !== track)]
-    .flatMap((t) => laneParams(t).map((p) => ({ track: t.id, param: p.name })))
-    .find((c) => !used.has(`${c.track}:${c.param}`));
+  const lanes = pattern.automation.filter((l) => l.track === track.id);
+  const params = laneParams(track);
+  const used = new Set(lanes.map((l) => l.param));
+  // A new lane starts on the track's first free param.
+  const candidate = params.find((p) => !used.has(p.name));
+  const full = lanes.length >= LIMITS.automationLanes;
 
   const editLanes = (fn) => store.edit((d) => { fn(d.patterns.find((p) => p.id === pattern.id).automation); });
-  const addLane = () => editLanes((list) => { list.push({ id: newId(), ...candidate, points: [] }); });
+  const addLane = () => editLanes((list) => { list.push({ id: newId(), track: track.id, param: candidate.name, points: [] }); });
 
   return html`
     <section class="automation">
       <header>
         <h3>Automation</h3>
-        <button class="ghost" disabled=${!candidate || lanes.length >= LIMITS.automationLanes} onClick=${addLane}
-          title=${lanes.length >= LIMITS.automationLanes ? `Up to ${LIMITS.automationLanes} lanes per pattern` : undefined}>
+        <button class="ghost" disabled=${!candidate || full} onClick=${addLane}
+          title=${full ? `Up to ${LIMITS.automationLanes} lanes per track in a pattern` : undefined}>
           + Automation
         </button>
       </header>
       ${lanes.map((lane) => html`
-        <${AutomationLane} key=${lane.id} store=${store} engine=${engine} pattern=${pattern} lane=${lane} used=${used} editLanes=${editLanes} />`)}
+        <${AutomationLane} key=${lane.id} store=${store} engine=${engine} pattern=${pattern} lane=${lane}
+          track=${track} params=${params} used=${used} editLanes=${editLanes} />`)}
     </section>
   `;
 }
@@ -72,7 +70,7 @@ export function AutomationLanes({ store, engine, pattern, track }) {
  *
  * A drag is drawn from local state and saved once, on release.
  */
-function AutomationLane({ store, engine, pattern, lane, used, editLanes }) {
+function AutomationLane({ store, engine, pattern, lane, track, params, used, editLanes }) {
   const { doc } = store;
   const plotRef = useRef();
   const drag = useRef(null);
@@ -80,9 +78,8 @@ function AutomationLane({ store, engine, pattern, lane, used, editLanes }) {
   const [hover, setHover] = useState(null);   // { near: 'line' | point index }
   const position = useEngineEvent(engine, 'position', engine.position);
 
-  const trackIndex = doc.tracks.findIndex((t) => t.id === lane.track);
-  const track = doc.tracks[trackIndex];
-  const param = track && laneParams(track).find((p) => p.name === lane.param);
+  const trackIndex = doc.tracks.indexOf(track);
+  const param = params.find((p) => p.name === lane.param);
   if (!param) return null;   // stranded until the next edit prunes it
   const { spec } = param;
   const base = track.instrument.params[lane.param];
@@ -92,12 +89,10 @@ function AutomationLane({ store, engine, pattern, lane, used, editLanes }) {
   const editLane = (fn) => editLanes((list) => fn(list.find((l) => l.id === lane.id), list));
 
   // Changing the param keeps the line's shape, rescaled to the new range.
-  const setTarget = (value) => {
-    const [trackId, name] = value.split(':');
-    const next = laneParams(doc.tracks.find((t) => t.id === trackId)).find((p) => p.name === name).spec;
+  const setParam = (name) => {
+    const next = params.find((p) => p.name === name).spec;
     editLane((l) => {
       l.points = l.points.map((pt) => ({ step: pt.step, value: round(toValue(next, toSlider(spec, pt.value))) }));
-      l.track = trackId;
       l.param = name;
     });
   };
@@ -197,17 +192,13 @@ function AutomationLane({ store, engine, pattern, lane, used, editLanes }) {
     ? describePoint(points[active])
     : points.length ? '' : `${formatValue(spec, base)} — click the line to add a point`;
   const playStep = position?.patternId === pattern.id ? position.step : -1;
-  const taken = (id) => used.has(id) && id !== `${lane.track}:${lane.param}`;
 
   return html`
     <div class="automation-lane" style=${`--hue: ${hue(trackIndex)}; --steps: ${length}`}>
       <div class="lane-head">
-        <select value=${`${lane.track}:${lane.param}`} onChange=${(e) => setTarget(e.target.value)} aria-label="Automated param">
-          ${doc.tracks.map((t) => html`
-            <optgroup key=${t.id} label=${t.name}>
-              ${laneParams(t).map((p) => html`
-                <option value=${`${t.id}:${p.name}`} disabled=${taken(`${t.id}:${p.name}`)}>${t.name} · ${p.label}</option>`)}
-            </optgroup>`)}
+        <select value=${lane.param} onChange=${(e) => setParam(e.target.value)} aria-label=${`Automated ${track.name} param`}>
+          ${params.map((p) => html`
+            <option value=${p.name} disabled=${used.has(p.name) && p.name !== lane.param}>${p.label}</option>`)}
         </select>
         <span class="muted readout">${readout}</span>
         <button class="ghost danger" onClick=${remove} aria-label="Remove automation lane">✕</button>
