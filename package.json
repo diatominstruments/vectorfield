@@ -13,8 +13,9 @@
     "test": "node --test"
   },
   "dependencies": {
+    "compression": "^1.8.2",
     "express": "^5.2.1",
-    "gloaming-instruments": "github:diatominstruments/gloaming-instruments#04d999ea514bea9fc6e486c48f07785b7fd67be9",
+    "gloaming-instruments": "github:diatominstruments/gloaming-instruments#762f72f4dbb0e27c8a056f314f351184acd02aca",
     "gloaming-kit": "github:diatominstruments/gloaming-kit#60cd7f3f0302030279922f0b4acb2aaa05505f7d",
     "google-auth-library": "^11.1.0",
     "htm": "^3.1.1",
