@@ -420,7 +420,9 @@ input[type=range].centered::-moz-range-progress { background: transparent; }
 }
 .lane-plot .point.active { background: hsl(var(--hue) var(--tint-hot)); box-shadow: 0 0 8px hsl(var(--hue) var(--tint-bright) / 0.6); }
 
-.sequencer-choice { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; }
+.sequencer-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 13px; }
+.sequencer-bar .copied { font-size: 12px; margin-left: 4px; }
+.sequencer-choice { display: flex; align-items: center; gap: 8px; margin-right: 6px; }
 .kind-dot { color: hsl(var(--hue) var(--tint)); font-size: 9px; margin-right: 6px; vertical-align: 2px; }
 /* The generative editors take the theme's colour, not their track's. */
 .bounce-editor { --hue: var(--accent-hue); display: grid; grid-template-columns: minmax(0, 520px) minmax(240px, 320px); gap: 18px; align-items: start; }

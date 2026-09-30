@@ -18,6 +18,11 @@ const GENERATIVE = {
   tubules: { label: 'Microtubules', fresh: defaultTubules, Editor: TubuleEditor, summary: (c) => plural(c.rings.length * c.sections, 'zone') },
 };
 
+// What Copy took: one track's sequencer in one pattern — its notes, or its
+// generative settings. Kept for the session, so it can be pasted onto any
+// track in any pattern, even in another song.
+let clipboard = null;
+
 export function PatternsView({ store, engine, pattern, onSelect }) {
   const { doc } = store;
   const [trackId, setTrackId] = useState(doc.tracks[0]?.id);
@@ -26,6 +31,7 @@ export function PatternsView({ store, engine, pattern, onSelect }) {
   const pitched = track && !registry.get(track.instrument.id).keys;
   const kind = track && pattern ? sequencerOf(pattern, track.id) : 'steps';
   const generative = GENERATIVE[kind];
+  const [copied, setCopied] = useState(clipboard);
 
   // A track keeps its notes and each sequencer's settings whichever it
   // uses, so switching back and forth loses nothing.
@@ -38,6 +44,43 @@ export function PatternsView({ store, engine, pattern, onSelect }) {
       delete p.sequencers[track.id];
     }
   });
+
+  const copy = () => {
+    clipboard = {
+      kind,
+      data: structuredClone(generative ? pattern[kind][track.id] : pattern.notes[track.id] ?? []),
+      from: `${track.name} · ${pattern.name}`,
+      drums: Boolean(registry.get(track.instrument.id).keys),
+    };
+    setCopied(clipboard);
+  };
+
+  // Pasting replaces what the track plays in this pattern: its sequencer
+  // choice and that sequencer's notes or settings. Its other sequencers'
+  // settings stay, as when switching by hand.
+  const paste = () => {
+    const c = clipboard;
+    const label = (k) => GENERATIVE[k]?.label.toLowerCase() ?? 'notes';
+    const replacing = generative || pattern.notes[track.id]?.length;
+    const warnings = [
+      replacing && `Replace ${track.name}'s ${label(kind)} in "${pattern.name}" with ${c.from}'s ${label(c.kind)}?`,
+      c.drums !== !pitched && `${c.from} is ${c.drums ? 'a drum kit' : 'pitched'} and ${track.name} isn't, so the notes may not make sense.`,
+    ].filter(Boolean);
+    if (warnings.length && !confirm(warnings.join('\n\n'))) return;
+    store.edit((d) => {
+      const p = d.patterns.find((x) => x.id === pattern.id);
+      if (c.kind === 'steps') {
+        delete p.sequencers[track.id];
+        // Notes past the end of a shorter pattern are dropped or cut short.
+        const notes = c.data.filter((n) => n.step < p.length).map((n) => ({ ...n, length: Math.min(n.length, p.length - n.step) }));
+        if (notes.length) p.notes[track.id] = notes;
+        else delete p.notes[track.id];
+      } else {
+        p.sequencers[track.id] = c.kind;
+        p[c.kind][track.id] = structuredClone(c.data);
+      }
+    });
+  };
 
   const addPattern = () => {
     const p = newPattern(`Pattern ${doc.patterns.length + 1}`, pattern?.length ?? 16);
@@ -83,13 +126,19 @@ export function PatternsView({ store, engine, pattern, onSelect }) {
                   </button>`;
               })}
             </nav>
-            <label class="sequencer-choice">
-              <span class="muted">${track.name} sequencer</span>
-              <select value=${kind} onChange=${(e) => setSequencer(e.target.value)}>
-                <option value="steps">Steps</option>
-                ${Object.entries(GENERATIVE).map(([k, g]) => html`<option value=${k}>${g.label}</option>`)}
-              </select>
-            </label>
+            <div class="sequencer-bar">
+              <label class="sequencer-choice">
+                <span class="muted">${track.name} sequencer</span>
+                <select value=${kind} onChange=${(e) => setSequencer(e.target.value)}>
+                  <option value="steps">Steps</option>
+                  ${Object.entries(GENERATIVE).map(([k, g]) => html`<option value=${k}>${g.label}</option>`)}
+                </select>
+              </label>
+              <button class="ghost" onClick=${copy} title=${`Copy ${track.name}'s ${generative ? generative.label.toLowerCase() : 'notes'} in this pattern`}>Copy</button>
+              <button class="ghost" disabled=${!copied} onClick=${paste}
+                title=${copied ? `Paste ${copied.from} onto ${track.name}` : 'Copy a track\'s pattern first'}>Paste</button>
+              ${copied && html`<span class="muted copied">Copied: ${copied.from}</span>`}
+            </div>
             ${generative
               ? html`<${generative.Editor} key=${`${pattern.id}:${track.id}:${kind}`} store=${store} engine=${engine} pattern=${pattern} track=${track} />`
               : html`

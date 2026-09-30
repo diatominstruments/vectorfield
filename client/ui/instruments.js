@@ -28,7 +28,7 @@ export function InstrumentsView({ store, engine }) {
 }
 
 function TrackCard({ track, index, store, engine }) {
-  const [open, setOpen] = useState(index === 0);
+  const [open, setOpen] = useState(false);
   const M = registry.get(track.instrument.id);
   const edit = (fn) => store.edit((d) => fn(d.tracks.find((t) => t.id === track.id), d));
   const noteCount = store.doc.patterns.reduce((n, p) => n + (p.notes[track.id]?.length ?? 0), 0);
