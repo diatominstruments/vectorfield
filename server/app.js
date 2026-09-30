@@ -7,6 +7,8 @@ import { songsRouter } from './songs.js';
 import { publicRouter } from './public.js';
 
 const PUBLIC = new URL('../public/', import.meta.url).pathname;
+// The sampler's banks ship inside the instrument library, beside its source.
+const KITS = new URL('kits/', import.meta.resolve('gloaming-instruments')).pathname;
 
 // Google's documented allowances for Identity Services, and Apple's sign-in
 // script; everything else is same-origin only.
@@ -57,6 +59,7 @@ export function createApp(db) {
 
   app.use('/api', api);
   app.use(express.static(PUBLIC));
+  app.use('/kits', express.static(KITS), (_req, res) => res.sendStatus(404));
   // Client-side routes all load the one page.
   app.get('/{*path}', (_req, res) => res.sendFile('index.html', { root: PUBLIC }));
 

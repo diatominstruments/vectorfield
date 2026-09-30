@@ -63,11 +63,8 @@ export const LIMITS = Object.freeze({
 
 export const PATTERN_LENGTHS = [8, 16, 32, 64];
 
-/** Instruments the app can't offer yet. The sampler needs a sample library. */
-const UNAVAILABLE = new Set(['sampler']);
-
 export const instrumentTypes = () =>
-  [...registry.values()].filter((M) => M.kind === 'instrument' && !UNAVAILABLE.has(M.id));
+  [...registry.values()].filter((M) => M.kind === 'instrument');
 export const effectTypes = () =>
   [...registry.values()].filter((M) => M.kind === 'effect');
 

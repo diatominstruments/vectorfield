@@ -1,7 +1,10 @@
-import { create, chain } from 'gloaming-instruments';
+import { create, chain, Sampler } from 'gloaming-instruments';
 import { blockTimes, nextBlock, sequencerOf } from '../shared/song.js';
 import { BounceSim } from './bounce-sim.js';
 import { TubuleSim } from './tubule-sim.js';
+
+// The server serves the library's sample banks here (see server/app.js).
+Sampler.bankRoot = '/kits/';
 
 const LOOKAHEAD = 0.12;   // seconds of audio scheduled ahead of the clock
 const TICK_MS = 25;
