@@ -67,13 +67,15 @@ function Player({ song, user }) {
   const toggleRef = useRef(toggle);
   toggleRef.current = toggle;
   useSpaceToPlay(toggleRef);
+  const stageRef = useRef();
+  const { full, idle, toggleFull, onPointerMove } = useFullscreen(stageRef);
 
   const canPlay = doc.arrangement.length > 0;
   const patternIndex = new Map(doc.patterns.map((p, i) => [p.id, i]));
 
   return html`
     <main class="song-page">
-      <div class="stage">
+      <div ref=${stageRef} class=${`stage ${full ? 'full' : ''} ${full && idle && playing ? 'idle' : ''}`} onPointerMove=${onPointerMove}>
         <${VisualCanvas} engine=${engine} timeline=${timeline} look=${doc.look} holdTime=${holdTime} class="stage-canvas"
           onClick=${canPlay ? toggle : undefined} />
         ${section?.name && html`<span key=${section.from} class="stage-section" aria-live="polite">${section.name}</span>`}
@@ -81,6 +83,12 @@ function Player({ song, user }) {
           <button class="big-play" onClick=${() => play()} disabled=${!canPlay} aria-label="Play">
             ${canPlay ? html`<span aria-hidden="true">▶</span> ${played ? 'Play again' : 'Play'}` : 'Nothing to play yet'}
           </button>`}
+        <button class="stage-fullscreen" onClick=${toggleFull} onMouseDown=${(e) => e.preventDefault()} aria-pressed=${full}
+          aria-label=${full ? 'Exit full screen' : 'Full screen'} title=${full ? 'Exit full screen (F)' : 'Full screen (F)'}>
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d=${full ? 'M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4' : 'M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4'} />
+          </svg>
+        </button>
       </div>
 
       ${canPlay && html`
@@ -115,6 +123,62 @@ function Player({ song, user }) {
       ${!user && html`<p class="muted cta">Made with Vectorfield. <${Link} href="/sign-in?next=/studio">Sign in</${Link}> to make your own.</p>`}
     </main>
   `;
+}
+
+/**
+ * Full screen for the stage, with F to toggle. Where the browser can't put
+ * an element full screen (iPhone Safari), the stage covers the window
+ * instead. While full, `idle` turns on after the pointer rests a moment, so
+ * the button and cursor can get out of the way of the visuals.
+ */
+function useFullscreen(ref) {
+  const [full, setFull] = useState(false);
+  const [idle, setIdle] = useState(false);
+  const idleTimer = useRef();
+  const native = typeof document !== 'undefined' && document.fullscreenEnabled;
+
+  const toggleFull = () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else if (full) setFull(false);
+    else if (native) ref.current?.requestFullscreen().catch(() => setFull(true));
+    else setFull(true);
+  };
+  const toggleRef = useRef(toggleFull);
+  toggleRef.current = toggleFull;
+
+  const onPointerMove = () => {
+    setIdle(false);
+    clearTimeout(idleTimer.current);
+    idleTimer.current = setTimeout(() => setIdle(true), 2500);
+  };
+
+  useEffect(() => {
+    const onChange = () => setFull(document.fullscreenElement === ref.current);
+    const onKey = (e) => {
+      if (e.target.closest?.('input, select, textarea') || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 'f' || e.key === 'F') toggleRef.current();
+      // Esc leaves native full screen by itself; the window-filling fallback needs this.
+      else if (e.key === 'Escape' && !document.fullscreenElement) setFull(false);
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('fullscreenchange', onChange);
+      removeEventListener('keydown', onKey);
+      clearTimeout(idleTimer.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (full) onPointerMove();
+    // The fallback covers the window, so the page underneath shouldn't scroll.
+    if (full && !document.fullscreenElement) {
+      document.documentElement.style.overflow = 'hidden';
+      return () => { document.documentElement.style.overflow = ''; };
+    }
+  }, [full]);
+
+  return { full, idle, toggleFull, onPointerMove };
 }
 
 /** How long a song is, for one that doesn't just play straight through. */
