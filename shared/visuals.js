@@ -22,7 +22,9 @@ import { SongError } from './errors.js';
 export const BAND_NAMES = ['subBass', 'bass', 'lowMid', 'mid', 'highMid', 'treble'];
 export const TRIGGER_NAMES = ['bass', 'snare', 'hihat'];
 
-export const VISUAL_LIMITS = Object.freeze({ perBlock: 6, bindSlots: 16, options: 8, specDepth: 4, specParts: 8 });
+export const VISUAL_LIMITS = Object.freeze({
+  perBlock: 6, bindSlots: 16, options: 8, specDepth: 4, specParts: 8, gridSize: 32,
+});
 
 export const STYLE_KEYS = {
   background: 'color',
@@ -98,6 +100,22 @@ export function normalizeSpec(spec, depth = 0) {
   return out;
 }
 
+const GRID_ROW = /^[\x20-\x7e]*$/;
+
+/**
+ * A `kind: 'grid'` option (a glyph drawing) as string rows, one character
+ * per cell; rows given as number arrays become digit strings. Null if it
+ * isn't a grid. The kit reads the characters; here they're only bounded.
+ */
+function normalizeGrid(value) {
+  const max = VISUAL_LIMITS.gridSize;
+  if (!Array.isArray(value) || !value.length || value.length > max) return null;
+  const rows = value.map((row) => (Array.isArray(row)
+    ? row.map((c) => (typeof c === 'number' && Number.isFinite(c) ? String(clampNum(Math.round(c), 0, 9)) : '.')).join('')
+    : row));
+  return rows.every((row) => typeof row === 'string' && row.length <= max && GRID_ROW.test(row)) ? rows : null;
+}
+
 function normalizeVisual(v, newId) {
   if (!isObj(v) || typeof v.viz !== 'string' || !VIZ_ID.test(v.viz)) throw new SongError('bad visual');
   const bind = {};
@@ -114,6 +132,10 @@ function normalizeVisual(v, newId) {
     if (typeof value === 'string' && value.length <= 32) options[key] = value;
     else if (typeof value === 'number' && Number.isFinite(value)) options[key] = value;
     else if (typeof value === 'boolean') options[key] = value;
+    else if (Array.isArray(value)) {
+      const grid = normalizeGrid(value);
+      if (grid) options[key] = grid;
+    }
   }
   return {
     id: typeof v.id === 'string' && /^[a-z0-9]{1,24}$/.test(v.id) ? v.id : newId(),

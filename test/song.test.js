@@ -82,6 +82,22 @@ test('visuals: signal specs stay inside the closed language', () => {
   }
 });
 
+test('visuals: grid options keep their drawing, bounded', () => {
+  const song = sampleSong();
+  const [block] = song.arrangement;
+  const glyph = ['2..1', '.21.', '#  x'];
+  block.visuals[0].options = {
+    glyph,
+    matrix: [[0, 1, 2], [9.4, 12, -1]],
+    huge: Array(33).fill('1'),
+    wide: ['1'.repeat(33)],
+    mixed: ['11', { row: 1 }],
+    control: ['1\n1'],
+  };
+  const clean = normalizeSong(song).arrangement[0];
+  assert.deepEqual(clean.visuals[0].options, { glyph, matrix: ['012', '990'] });
+});
+
 test('block times follow pattern lengths and tempo', () => {
   const song = sampleSong();
   song.arrangement.push({ ...song.arrangement[0], id: 'second' });

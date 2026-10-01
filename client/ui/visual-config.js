@@ -1,4 +1,5 @@
-import { BANDS, DEFAULT_TRIGGERS, catalog, describe } from 'gloaming-kit';
+import { BANDS, DEFAULT_TRIGGERS, Glyph, catalog, describe } from 'gloaming-kit';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { html } from '../lib.js';
 import { NO_3D_HINT, needs3D } from '../three.js';
 import { STYLE_KEYS, DEFAULT_LOOK } from '../../shared/visuals.js';
@@ -128,12 +129,138 @@ function EventSlot({ slot, def, spec, onChange }) {
     </div>`;
 }
 
+// Shared by every grid editor, so mirroring stays on while moving between visuals.
+const mirror = { h: false, v: false };
+
+/** A drawing's cells on a width × height canvas, row-major; cropped or padded with empty. */
+function gridCells(rows, width, height, levels) {
+  const cells = new Uint8Array(width * height);
+  const glyph = Glyph.parse(rows, levels);
+  if (glyph) {
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) cells[y * width + x] = glyph.get(x, y);
+    }
+  }
+  return cells;
+}
+
+const gridRows = (cells, width, height) => Array.from({ length: height }, (_, y) => Array.from(
+  cells.subarray(y * width, (y + 1) * width), (c) => (c ? String(c) : '.'),
+).join(''));
+
 /**
- * One declared option, as the kit describes it: an enum, or a free-form
- * string or number. Clearing it (empty string) falls back to the
+ * A click-to-draw canvas for a `kind: 'grid'` option (the Glyphs'
+ * drawing). Clicking a cell steps it up a strength and back to empty;
+ * dragging paints the strength the first cell got; shift- or right-click
+ * erases. Mirroring paints the reflected cells too. The drawing is handed
+ * over on release rather than per cell, since a changed option makes a new
+ * instance that crossfades in.
+ */
+function GlyphField({ name, def, value, onChange }) {
+  const levels = def.levels ?? 2;
+  const saved = value !== undefined ? Glyph.parse(value, levels) : null;
+  // The declared canvas, widened if a saved drawing is bigger.
+  const width = Math.max(def.width, saved?.width ?? 0);
+  const height = Math.max(def.height, saved?.height ?? 0);
+  const shown = value ?? def.default;
+
+  const [cells, setCells] = useState(() => gridCells(shown, width, height, levels));
+  const [mirrored, setMirrored] = useState({ ...mirror });
+  const paint = useRef(null);   // { level, cells } while a stroke is in progress
+  const gridEl = useRef(null);
+
+  // Follow changes made elsewhere (another panel, a reload), not mid-stroke.
+  const shownKey = `${width}x${height}:${JSON.stringify(shown)}`;
+  useEffect(() => {
+    if (!paint.current) setCells(gridCells(shown, width, height, levels));
+  }, [shownKey]);
+
+  const cellAt = (e) => {
+    const r = gridEl.current.getBoundingClientRect();
+    const x = Math.floor(((e.clientX - r.left) / r.width) * width);
+    const y = Math.floor(((e.clientY - r.top) / r.height) * height);
+    return x >= 0 && y >= 0 && x < width && y < height ? [x, y] : null;
+  };
+  const set = (next, x, y, level) => {
+    const xs = mirrored.h ? [x, width - 1 - x] : [x];
+    const ys = mirrored.v ? [y, height - 1 - y] : [y];
+    for (const cx of xs) for (const cy of ys) next[cy * width + cx] = level;
+  };
+
+  const down = (e) => {
+    const at = cellAt(e);
+    if (!at) return;
+    e.preventDefault();
+    gridEl.current.setPointerCapture(e.pointerId);
+    const [x, y] = at;
+    const next = cells.slice();
+    const level = e.button === 2 || e.shiftKey ? 0 : (next[y * width + x] + 1) % (levels + 1);
+    set(next, x, y, level);
+    paint.current = { level, cells: next };
+    setCells(next);
+  };
+  const move = (e) => {
+    const stroke = paint.current;
+    const at = stroke && cellAt(e);
+    if (!at) return;
+    const i = at[1] * width + at[0];
+    if (stroke.cells[i] === stroke.level && !mirrored.h && !mirrored.v) return;
+    stroke.cells = stroke.cells.slice();
+    set(stroke.cells, at[0], at[1], stroke.level);
+    setCells(stroke.cells);
+  };
+  const up = () => {
+    const stroke = paint.current;
+    if (!stroke) return;
+    paint.current = null;
+    onChange(gridRows(stroke.cells, width, height));
+  };
+
+  const toggle = (axis) => {
+    mirror[axis] = !mirror[axis];
+    setMirrored({ ...mirror });
+  };
+  const clear = () => {
+    const empty = new Uint8Array(width * height);
+    setCells(empty);
+    onChange(gridRows(empty, width, height));
+  };
+  const empty = !cells.some(Boolean);
+
+  return html`
+    <div class="field glyph-field">
+      <span>${name}</span>
+      <div class="glyph-editor">
+        <div class="glyph-grid" ref=${gridEl} role="img" aria-label=${`${name} drawing, ${width} by ${height} cells`}
+          style=${{ gridTemplateColumns: `repeat(${width}, 1fr)`, aspectRatio: `${width} / ${height}` }}
+          onPointerDown=${down} onPointerMove=${move} onPointerUp=${up} onPointerCancel=${up}
+          onContextMenu=${(e) => e.preventDefault()}>
+          ${Array.from(cells, (level, i) => html`
+            <span key=${i} class=${level ? 'on' : ''} style=${level ? { '--w': level / levels } : null} />`)}
+        </div>
+        <div class="glyph-tools">
+          <button class="ghost" aria-pressed=${mirrored.h} title="Mirror left–right" onClick=${() => toggle('h')}>⇆</button>
+          <button class="ghost" aria-pressed=${mirrored.v} title="Mirror top–bottom" onClick=${() => toggle('v')}>⇅</button>
+          <button class="ghost" disabled=${empty} onClick=${clear}>Clear</button>
+          <button class="ghost" disabled=${value === undefined} title="Back to the visualization's own drawing"
+            onClick=${() => onChange('')}>Default</button>
+        </div>
+        <p class="muted glyph-help">
+          ${empty
+            ? 'Empty, so the visualization draws its default until you add cells.'
+            : `Click to step a cell through ${levels} strengths; drag to paint; shift- or right-click to erase.`}
+        </p>
+      </div>
+    </div>`;
+}
+
+/**
+ * One declared option, as the kit describes it: an enum, a free-form
+ * string or number, or a grid drawing. Clearing it (empty string) falls back to the
  * visualization's own default.
  */
 function OptionField({ name, def, value, onChange }) {
+  if (def.kind === 'grid') return html`<${GlyphField} name=${name} def=${def} value=${value} onChange=${onChange} />`;
   if (def.kind === 'enum') {
     return html`
       <label class="field">
