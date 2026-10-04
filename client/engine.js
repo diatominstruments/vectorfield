@@ -2,6 +2,8 @@ import { create, chain, Sampler } from 'gloaming-instruments';
 import { automationValue, blockTimes, nextBlock, sequencerOf } from '../shared/song.js';
 import { BounceSim } from './bounce-sim.js';
 import { TubuleSim } from './tubule-sim.js';
+import { AntSim } from './ant-sim.js';
+import { FireflySim } from './firefly-sim.js';
 
 // The server serves the library's sample banks here (see server/app.js).
 Sampler.bankRoot = '/kits/';
@@ -10,6 +12,9 @@ const LOOKAHEAD = 0.12;   // seconds of audio scheduled ahead of the clock
 const TICK_MS = 25;
 const STEPS_PER_BEAT = 4;
 const TUBULE_VELOCITY = 0.7;
+const FLASH_VELOCITY = 0.75;    // a firefly flashing in its own time
+const PULLED_VELOCITY = 0.6;    // one set off by another's flash, a touch softer under it
+const TRACE_SECONDS = 2;        // how much of a simulation's history the editors can draw from
 const AUTOMATION_RESOLUTION = 4;   // automation values set per step
 
 /**
@@ -36,7 +41,9 @@ export class Engine {
     this.listeners = new Map();
     this.playing = false;
     this.position = null;
-    this.automated = new Map();   // track id -> params automation has moved off the song's values
+    // Params automation has moved off the song's values:
+    // track id -> effect uid ('' for the instrument) -> param names.
+    this.automated = new Map();
   }
 
   on(event, fn) {
@@ -95,8 +102,9 @@ export class Engine {
         const key = effectsKey(track);
         if (key !== live.key) this.#rewireEffects(live, track);
         // Params under automation follow their lane, not the song's value.
-        updateParams(live.instrument, track.instrument.params, this.automated.get(track.id));
-        track.effects.forEach((e, i) => updateParams(live.effects[i], e.params));
+        const automated = this.automated.get(track.id);
+        updateParams(live.instrument, track.instrument.params, automated?.get(''));
+        track.effects.forEach((e, i) => updateParams(live.effects[i], e.params, automated?.get(e.uid)));
       }
       live.gain.gain.setTargetAtTime(track.mute ? 0 : track.gain, this.ctx.currentTime, 0.01);
     }
@@ -204,6 +212,8 @@ export class Engine {
         const muted = track.mute || blockMute.includes(track.id);
         if (kind === 'bounce') this.#bounceStep(pattern, track, muted, t, stepLength);
         else if (kind === 'tubules') stepped.add(this.#tubuleStep(pattern, track, muted, t, stepLength));
+        else if (kind === 'ants') this.#antStep(pattern, track, muted, t, stepLength);
+        else if (kind === 'fireflies') this.#fireflyStep(pattern, track, muted, t, stepLength);
         else if (!muted) this.#gridStep(pattern, track, t, stepLength);
       }
       // Tubules hold their notes, so any left sounding from another pattern
@@ -242,14 +252,16 @@ export class Engine {
   #automate(pattern, t, stepLength) {
     const automated = new Map();
     for (const lane of pattern.automation ?? []) {
-      const live = this.live.get(lane.track);
-      if (!lane.points.length || !live || !(lane.param in live.instrument.constructor.params)) continue;
+      const target = lane.points.length ? this.#laneModule(lane.track, lane.effect ?? '') : null;
+      if (!target || !(lane.param in target.module.constructor.params)) continue;
       for (let i = 0; i < AUTOMATION_RESOLUTION; i++) {
         const at = i / AUTOMATION_RESOLUTION;
-        live.instrument.setParam(lane.param, automationValue(lane.points, this.cursor.step + at), t + at * stepLength);
+        target.module.setParam(lane.param, automationValue(lane.points, this.cursor.step + at), t + at * stepLength);
       }
-      if (!automated.has(lane.track)) automated.set(lane.track, new Set());
-      automated.get(lane.track).add(lane.param);
+      if (!automated.has(lane.track)) automated.set(lane.track, new Map());
+      const byModule = automated.get(lane.track);
+      if (!byModule.has(lane.effect ?? '')) byModule.set(lane.effect ?? '', new Set());
+      byModule.get(lane.effect ?? '').add(lane.param);
     }
     this.#restoreParams(t, automated);
     this.automated = automated;
@@ -257,15 +269,27 @@ export class Engine {
 
   // Put automated params back to the song's values, except those in `keep`.
   #restoreParams(time, keep = new Map()) {
-    for (const [trackId, params] of this.automated) {
-      const track = this.song.tracks.find((tr) => tr.id === trackId);
-      const live = this.live.get(trackId);
-      if (!track || !live) continue;
-      for (const param of params) {
-        if (keep.get(trackId)?.has(param) || !(param in live.instrument.constructor.params)) continue;
-        live.instrument.setParam(param, track.instrument.params[param], time);
+    for (const [trackId, byModule] of this.automated) {
+      for (const [effect, params] of byModule) {
+        const target = this.#laneModule(trackId, effect);
+        if (!target) continue;   // the track or effect has gone
+        for (const param of params) {
+          if (keep.get(trackId)?.get(effect)?.has(param) || !(param in target.module.constructor.params)) continue;
+          target.module.setParam(param, target.entry.params[param], time);
+        }
       }
     }
+  }
+
+  // The live module an automation lane sweeps, with its entry in the song:
+  // the track's instrument, or its effect with uid `effect`. Null once gone.
+  #laneModule(trackId, effect) {
+    const track = this.song.tracks.find((tr) => tr.id === trackId);
+    const live = this.live.get(trackId);
+    if (!track || !live) return null;
+    if (!effect) return { module: live.instrument, entry: track.instrument };
+    const i = track.effects.findIndex((e) => e.uid === effect);
+    return i < 0 ? null : { module: live.effects[i], entry: track.effects[i] };
   }
 
   // Step grid: the track's notes that start on this step.
@@ -296,23 +320,89 @@ export class Engine {
     const hits = entry.sim.advance(1 / STEPS_PER_BEAT, (at, balls) => {
       entry.trace.push({ time: t + at * beat, balls: snapshot(balls) });
     });
-    // Keep a couple of seconds of history for the editor to draw from.
-    const keepFrom = this.ctx.currentTime - 2;
-    while (entry.trace.length > 2 && entry.trace[1].time < keepFrom) entry.trace.shift();
-    while (entry.hits.length && entry.hits[0].time < keepFrom) entry.hits.shift();
+    this.#trimTrace(entry);
 
     // A muted track's balls keep moving; they just don't sound.
     const live = muted ? null : this.live.get(track.id);
     for (const hit of hits) {
-      let time = t + hit.at * beat;
-      if (config.quantize) {
-        const step = this.cursor.step + hit.at * STEPS_PER_BEAT;
-        const snapped = Math.ceil(step / config.quantize - 1e-9) * config.quantize;
-        time = t + (snapped - this.cursor.step) * stepLength;
-      }
+      const time = this.#hitTime(config, t, stepLength, hit.at);
       entry.hits.push({ time, segment: hit.segment });
       if (live) this.#queueOn(time, live.instrument, config.walls[hit.segment], 0.45 + 0.55 * hit.strength, config.gate * stepLength);
     }
+  }
+
+  // Ant colony: walk the track's ants through this step, playing each node
+  // they reach, louder along well-trodden paths. The colony lives for the
+  // whole playback, so its favourite routes carry on from where they were
+  // the next time the pattern comes round.
+  #antStep(pattern, track, muted, t, stepLength) {
+    const config = pattern.ants[track.id];
+    const key = simKey(pattern.id, track.id, 'ants');
+    let entry = this.sims.get(key);
+    if (!entry) {
+      entry = { sim: new AntSim(config), trace: [], hits: [] };
+      this.sims.set(key, entry);
+    }
+    entry.sim.sync(config);
+
+    const beat = stepLength * STEPS_PER_BEAT;
+    const snap = (time) => ({ time, ants: entry.sim.positions(), scent: Object.fromEntries(entry.sim.scent) });
+    if (!entry.trace.length) entry.trace.push(snap(t));
+    const arrivals = entry.sim.advance(1 / STEPS_PER_BEAT, (at) => entry.trace.push(snap(t + at * beat)));
+    this.#trimTrace(entry);
+
+    // A muted track's ants keep foraging; they just don't sound.
+    const live = muted ? null : this.live.get(track.id);
+    const notes = new Map(config.nodes.map((n) => [n.id, n.note]));
+    for (const arrival of arrivals) {
+      const time = this.#hitTime(config, t, stepLength, arrival.at);
+      entry.hits.push({ time, node: arrival.node });
+      if (live) this.#queueOn(time, live.instrument, notes.get(arrival.node), 0.45 + 0.55 * arrival.strength, config.gate * stepLength);
+    }
+  }
+
+  // Fireflies: run the track's fireflies through this step, playing each
+  // flash. They live for the whole playback, so whatever step they've
+  // fallen into carries on — unless the settings scatter them again at the
+  // start of every pass.
+  #fireflyStep(pattern, track, muted, t, stepLength) {
+    const config = pattern.fireflies[track.id];
+    const key = simKey(pattern.id, track.id, 'fireflies');
+    let entry = this.sims.get(key);
+    if (!entry) {
+      entry = { sim: new FireflySim(config), hits: [] };
+      this.sims.set(key, entry);
+    }
+    entry.sim.sync(config);
+    if (config.restart && this.cursor.step === 0) entry.sim.scatter();
+
+    const flashes = entry.sim.advance(1 / STEPS_PER_BEAT);
+    this.#trimTrace(entry);
+
+    // A muted track's fireflies keep flashing; they just don't sound.
+    const live = muted ? null : this.live.get(track.id);
+    const notes = new Map(config.flies.map((f) => [f.id, f.note]));
+    for (const flash of flashes) {
+      const time = this.#hitTime(config, t, stepLength, flash.at);
+      entry.hits.push({ time, id: flash.id });
+      if (live) this.#queueOn(time, live.instrument, notes.get(flash.id), flash.pulled ? PULLED_VELOCITY : FLASH_VELOCITY, config.gate * stepLength);
+    }
+  }
+
+  // When a hit `at` beats into the step starting at `t` sounds: right then,
+  // or snapped forward to the next line of the settings' grid.
+  #hitTime(config, t, stepLength, at) {
+    if (!config.quantize) return t + at * stepLength * STEPS_PER_BEAT;
+    const step = this.cursor.step + at * STEPS_PER_BEAT;
+    const snapped = Math.ceil(step / config.quantize - 1e-9) * config.quantize;
+    return t + (snapped - this.cursor.step) * stepLength;
+  }
+
+  // Keep a couple of seconds of a simulation's history for its editor to draw from.
+  #trimTrace(entry) {
+    const keepFrom = this.ctx.currentTime - TRACE_SECONDS;
+    while (entry.trace?.length > 2 && entry.trace[1].time < keepFrom) entry.trace.shift();
+    while (entry.hits.length && entry.hits[0].time < keepFrom) entry.hits.shift();
   }
 
   // Microtubules: run the track's tubules through this step. Holding, each
@@ -358,9 +448,7 @@ export class Engine {
       entry.trace.push({ time: t + at * beat, tubules: snapshotTubules(tubules) });
       reconcile(t + at * beat);
     });
-    const keepFrom = this.ctx.currentTime - 2;
-    while (entry.trace.length > 2 && entry.trace[1].time < keepFrom) entry.trace.shift();
-    while (entry.hits.length && entry.hits[0].time < keepFrom) entry.hits.shift();
+    this.#trimTrace(entry);
 
     for (const e of entries) {
       const time = t + e.at * beat;
@@ -444,8 +532,9 @@ export class Engine {
   }
 
   /**
-   * What a track's balls or tubules in a pattern have been doing, for
-   * drawing: { trace: [{ time, balls | tubules }], hits: [{ time, … }] }.
+   * What a track's balls, tubules, ants or fireflies in a pattern have been
+   * doing, for drawing: { trace: [{ time, balls | tubules | ants }], hits:
+   * [{ time, … }] } (fireflies have hits only).
    * Null unless playing.
    */
   sequencerTrace(patternId, trackId, kind) {

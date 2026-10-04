@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   defaultSong, normalizeSong, blockTimes, stylesInEffect, visualsInEffect, newBlock, newVisual, copyBlock, removeBlock,
-  nextBlock, playOrder, sections, automationValue, LIMITS, SongError,
+  nextBlock, playOrder, sections, automationValue, newEffect, pruneAutomation, LIMITS, SongError,
 } from '../shared/song.js';
 import { sampleSong } from './fixtures.js';
 
@@ -262,6 +262,44 @@ test('automation lanes are validated against their track\'s instrument', () => {
   assert.equal(normalizeSong(song).patterns[0].automation.length, 2 * LIMITS.automationLanes);
   p.automation.push(...lanes(bass, ['attack']));
   assert.throws(() => normalizeSong(song), SongError);
+});
+
+test('automation lanes can sweep a track\'s effects, named by uid', () => {
+  const song = sampleSong();
+  const [, bass, keys] = song.tracks;
+  const reverb = keys.effects[0];
+  const p = song.patterns[0];
+  p.automation = [
+    { id: 'a1', track: keys.id, effect: reverb.uid, param: 'mix', points: [{ step: 0, value: 5 }] },
+    { id: 'a3', track: keys.id, effect: reverb.uid, param: 'size', points: [] }, // rebuilds the impulse
+    { id: 'a4', track: bass.id, effect: reverb.uid, param: 'mix', points: [] },  // not this track's effect
+    { id: 'a5', track: keys.id, effect: 'gone', param: 'mix', points: [] },
+    { id: 'a6', track: keys.id, effect: reverb.uid, param: 'mix', points: [] },  // same param twice
+  ];
+  assert.deepEqual(normalizeSong(song).patterns[0].automation, [
+    { id: 'a1', track: keys.id, effect: reverb.uid, param: 'mix', points: [{ step: 0, value: 1 }] },
+  ]);
+
+  // An effect's lanes go when it does, and not before.
+  keys.effects.push(newEffect('delay'));
+  pruneAutomation(song);
+  assert.equal(p.automation.length, 1);
+  keys.effects.shift();
+  pruneAutomation(song);
+  assert.deepEqual(p.automation, []);
+});
+
+test('effects saved before they had uids get them, unique in their chain', () => {
+  const song = sampleSong();
+  const [, , keys] = song.tracks;
+  keys.effects = [{ id: 'reverb', params: {} }, { uid: 'same', id: 'delay', params: {} }, { uid: 'same', id: 'delay', params: {} }];
+  song.mix.effects = [{ id: 'delay', params: {} }];
+  const clean = normalizeSong(song);
+  const uids = clean.tracks[2].effects.map((e) => e.uid);
+  assert.equal(uids[1], 'same');
+  assert.equal(new Set(uids).size, 3);
+  assert.ok(uids.every((u) => /^[a-z0-9]{1,24}$/.test(u)));
+  assert.match(clean.mix.effects[0].uid, /^[a-z0-9]{1,24}$/);
 });
 
 test('patterns saved before automation get none', () => {

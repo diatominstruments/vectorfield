@@ -460,6 +460,8 @@ input[type=range].centered::-moz-range-progress { background: transparent; }
 .zone-tune { display: flex; gap: 6px; margin-top: 8px; }
 .zone-tune select { flex: 1; min-width: 0; }
 .bounce-controls h4 .muted { font-weight: normal; font-size: 12px; margin-left: 4px; }
+.bounce-controls .ball-row button.active { background: var(--accent); color: var(--on-accent); border-color: var(--accent); opacity: 1; }
+.bounce-controls .notice { font-size: 13px; margin: 0 0 10px; }
 
 /* ---- song ---- */
 

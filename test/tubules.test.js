@@ -9,7 +9,7 @@ const config = (extra = {}) => ({ ...defaultTubules(), catastrophe: 0, rescue: 0
 
 /** A sim holding one tubule, growing from the centre, with nothing random left to happen. */
 function oneTubule(extra = {}) {
-  const sim = new TubuleSim(config({ count: 1, ...extra }));
+  const sim = new TubuleSim(config({ count: 1, nucleation: 0, ...extra }));
   sim.tubules.set('a', { id: 'a', angle: 0, length: 0, growing: true, ring: -1 });
   return sim;
 }

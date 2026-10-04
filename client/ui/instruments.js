@@ -1,7 +1,7 @@
 import { useState } from 'preact/hooks';
 import { registry, matches } from 'gloaming-instruments';
 import { html, hue } from '../lib.js';
-import { LIMITS, instrumentTypes, effectTypes, moduleLabel, moduleEntry, newTrack, pruneAutomation } from '../../shared/song.js';
+import { LIMITS, GENERATIVE_SEQUENCERS, instrumentTypes, effectTypes, moduleLabel, moduleEntry, newEffect, newTrack, pruneAutomation } from '../../shared/song.js';
 import { ParamPanel, moduleInfo } from './params.js';
 import { ModulePicker } from './module-picker.js';
 
@@ -48,14 +48,17 @@ function TrackCard({ track, index, store, engine }) {
       for (const p of d.patterns) {
         delete p.notes[track.id];
         delete p.sequencers[track.id];
-        delete p.bounce[track.id];
-        delete p.tubules[track.id];
+        for (const kind of GENERATIVE_SEQUENCERS) delete p[kind][track.id];
       }
       pruneAutomation(d);
     });
   };
 
   const setInstrumentParams = (values) => edit((t) => { Object.assign(t.instrument.params, values); });
+  // Automation of an effect that's removed goes with it.
+  const editEffects = (fn) => edit((t, d) => { fn(t.effects); pruneAutomation(d); });
+  const patternsAutomating = (uid) => store.doc.patterns
+    .filter((p) => p.automation.some((l) => l.track === track.id && l.effect === uid && l.points.length)).length;
 
   return html`
     <article class=${`track ${track.mute ? 'muted' : ''}`} style=${`--hue: ${hue(index)}`}>
@@ -84,7 +87,7 @@ function TrackCard({ track, index, store, engine }) {
             <${ModuleHeading} module=${M} params=${track.instrument.params} />
             <${ParamPanel} module=${M} params=${track.instrument.params} onChange=${setInstrumentParams} />
           </div>
-          <${EffectChain} effects=${track.effects} edit=${(fn) => edit((t) => fn(t.effects))} />
+          <${EffectChain} effects=${track.effects} edit=${editEffects} automatedIn=${patternsAutomating} />
         </div>`}
     </article>
   `;
@@ -119,24 +122,32 @@ function MixCard({ store }) {
 
 /**
  * A chain of effect cards with reorder and remove, plus an add button while
- * there's room. `edit(fn)` makes a store edit, passing fn the effects list.
+ * there's room. `edit(fn)` makes a store edit, passing fn the effects list;
+ * `automatedIn(uid)`, where effects can be automated, counts the patterns
+ * that automate one.
  */
-function EffectChain({ effects, edit }) {
+function EffectChain({ effects, edit, automatedIn }) {
   const move = (i, by) => edit((list) => {
     const [e] = list.splice(i, 1);
     list.splice(i + by, 0, e);
   });
+  const remove = (i) => {
+    const count = automatedIn?.(effects[i].uid);
+    const label = moduleLabel(registry.get(effects[i].id));
+    if (count && !confirm(`Remove ${label} and its automation in ${count} pattern${count === 1 ? '' : 's'}?`)) return;
+    edit((list) => { list.splice(i, 1); });
+  };
 
   return html`
     ${effects.map((effect, i) => {
       const E = registry.get(effect.id);
       return html`
-        <div class="module effect" key=${`${i}:${effect.id}`}>
+        <div class="module effect" key=${effect.uid}>
           <${ModuleHeading} module=${E} params=${effect.params}>
             <span class="actions">
               <button class="ghost" disabled=${i === 0} onClick=${() => move(i, -1)} aria-label="Move earlier">←</button>
               <button class="ghost" disabled=${i === effects.length - 1} onClick=${() => move(i, 1)} aria-label="Move later">→</button>
-              <button class="ghost danger" onClick=${() => edit((list) => { list.splice(i, 1); })} aria-label="Remove effect">✕</button>
+              <button class="ghost danger" onClick=${() => remove(i)} aria-label="Remove effect">✕</button>
             </span>
           <//>
           <${ParamPanel} module=${E} params=${effect.params}
@@ -146,7 +157,7 @@ function EffectChain({ effects, edit }) {
     ${effects.length < LIMITS.effectsPerTrack && html`
       <div class="module add-effect">
         <${ModulePicker} types=${effectTypes()} grouped label="+ Add effect"
-          onPick=${(id) => edit((list) => { list.push(moduleEntry(id)); })} />
+          onPick=${(id) => edit((list) => { list.push(newEffect(id)); })} />
       </div>`}
   `;
 }

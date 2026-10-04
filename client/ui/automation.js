@@ -1,7 +1,7 @@
 import { useRef, useState } from 'preact/hooks';
 import { registry } from 'gloaming-instruments';
 import { html, hue, useEngineEvent } from '../lib.js';
-import { LIMITS, automatableParams, automationValue, newId } from '../../shared/song.js';
+import { LIMITS, automatableParams, automationValue, laneTarget, newId } from '../../shared/song.js';
 import { moduleInfo, formatValue, toSlider, toValue } from './params.js';
 
 const LINE_REACH = 10;   // px from the line (or a point) that still counts as on it
@@ -10,40 +10,66 @@ const LINE_REACH = 10;   // px from the line (or a point) that still counts as o
 // keeps saved songs small.
 const round = (v) => Number(v.toPrecision(4));
 
+/** What a lane sweeps, as one string: the effect's uid ('' for the instrument) and the param. */
+const targetKey = (effect, name) => `${effect ?? ''}:${name}`;
+
 /**
- * The params of a track's instrument a lane can sweep, labelled to read on
- * their own ('Filter cutoff', not 'Cutoff'), primary params first.
+ * The params of one module a lane can sweep, labelled to read on their own
+ * ('Filter cutoff', not 'Cutoff'; 'Reverb mix', not 'Mix'), primary params
+ * first.
  */
-function laneParams(track) {
-  const M = registry.get(track.instrument.id);
+function moduleParams(M, effect, prefix) {
   const info = moduleInfo(M);
   const groupOf = new Map(info.groups.flatMap((g) => g.params.map((name) => [name, g.label])));
   return automatableParams(M)
     .map(([name]) => {
       const spec = info.params[name];
       const group = groupOf.get(name);
-      const label = !group || info.groups.length === 1 || spec.label.toLowerCase().startsWith(group.toLowerCase())
+      let label = !group || info.groups.length === 1 || spec.label.toLowerCase().startsWith(group.toLowerCase())
         ? spec.label : `${group} ${spec.label.toLowerCase()}`;
-      return { name, spec, label };
+      if (prefix && !label.toLowerCase().startsWith(prefix.toLowerCase())) label = `${prefix} ${label.toLowerCase()}`;
+      return { key: targetKey(effect, name), effect, name, spec, label };
     })
     .sort((a, b) => Boolean(b.spec.primary) - Boolean(a.spec.primary));
 }
 
 /**
+ * Everything on a track a lane can sweep, grouped by module: the
+ * instrument's params, then each effect's in chain order. Two effects of
+ * one kind are numbered, so their params can be told apart.
+ */
+function laneTargets(track) {
+  const M = registry.get(track.instrument.id);
+  const groups = [{ label: moduleInfo(M).label, params: moduleParams(M) }];
+  const kinds = track.effects.map((e) => e.id);
+  track.effects.forEach((effect, i) => {
+    const E = registry.get(effect.id);
+    let name = moduleInfo(E).label;
+    if (kinds.filter((k) => k === effect.id).length > 1) name += ` ${kinds.slice(0, i + 1).filter((k) => k === effect.id).length}`;
+    const params = moduleParams(E, effect.uid, name);
+    if (params.length) groups.push({ label: name, params });
+  });
+  return groups;
+}
+
+/**
  * The selected track's automation lanes in the pattern, under its
- * sequencer. Each lane sweeps one of the track's instrument params through
- * the pattern along a line through its points; see song.js.
+ * sequencer. Each lane sweeps one param of the track's instrument or one
+ * of its effects through the pattern along a line through its points; see
+ * song.js.
  */
 export function AutomationLanes({ store, engine, pattern, track }) {
   const lanes = pattern.automation.filter((l) => l.track === track.id);
-  const params = laneParams(track);
-  const used = new Set(lanes.map((l) => l.param));
+  const groups = laneTargets(track);
+  const used = new Set(lanes.map((l) => targetKey(l.effect, l.param)));
   // A new lane starts on the track's first free param.
-  const candidate = params.find((p) => !used.has(p.name));
+  const candidate = groups.flatMap((g) => g.params).find((p) => !used.has(p.key));
   const full = lanes.length >= LIMITS.automationLanes;
 
   const editLanes = (fn) => store.edit((d) => { fn(d.patterns.find((p) => p.id === pattern.id).automation); });
-  const addLane = () => editLanes((list) => { list.push({ id: newId(), track: track.id, param: candidate.name, points: [] }); });
+  const addLane = () => editLanes((list) => {
+    list.push({ id: newId(), track: track.id, ...(candidate.effect && { effect: candidate.effect }), param: candidate.name, points: [] });
+  });
 
   return html`
     <section class="automation">
@@ -56,7 +82,7 @@ export function AutomationLanes({ store, engine, pattern, track }) {
       </header>
       ${lanes.map((lane) => html`
         <${AutomationLane} key=${lane.id} store=${store} engine=${engine} pattern=${pattern} lane=${lane}
-          track=${track} params=${params} used=${used} editLanes=${editLanes} />`)}
+          track=${track} groups=${groups} used=${used} editLanes=${editLanes} />`)}
     </section>
   `;
 }
@@ -70,7 +96,7 @@ export function AutomationLanes({ store, engine, pattern, track }) {
  *
  * A drag is drawn from local state and saved once, on release.
  */
-function AutomationLane({ store, engine, pattern, lane, track, params, used, editLanes }) {
+function AutomationLane({ store, engine, pattern, lane, track, groups, used, editLanes }) {
   const { doc } = store;
   const plotRef = useRef();
   const drag = useRef(null);
@@ -79,21 +105,25 @@ function AutomationLane({ store, engine, pattern, lane, track, params, used, edi
   const position = useEngineEvent(engine, 'position', engine.position);
 
   const trackIndex = doc.tracks.indexOf(track);
-  const param = params.find((p) => p.name === lane.param);
+  const key = targetKey(lane.effect, lane.param);
+  const params = groups.flatMap((g) => g.params);
+  const param = params.find((p) => p.key === key);
   if (!param) return null;   // stranded until the next edit prunes it
   const { spec } = param;
-  const base = track.instrument.params[lane.param];
+  const base = laneTarget(track, lane).params[lane.param];
   const points = draft ?? lane.points;
   const { length } = pattern;
 
   const editLane = (fn) => editLanes((list) => fn(list.find((l) => l.id === lane.id), list));
 
   // Changing the param keeps the line's shape, rescaled to the new range.
-  const setParam = (name) => {
-    const next = params.find((p) => p.name === name).spec;
+  const setTarget = (nextKey) => {
+    const next = params.find((p) => p.key === nextKey);
     editLane((l) => {
-      l.points = l.points.map((pt) => ({ step: pt.step, value: round(toValue(next, toSlider(spec, pt.value))) }));
-      l.param = name;
+      l.points = l.points.map((pt) => ({ step: pt.step, value: round(toValue(next.spec, toSlider(spec, pt.value))) }));
+      l.param = next.name;
+      if (next.effect) l.effect = next.effect;
+      else delete l.effect;
     });
   };
   const remove = () => editLanes((list) => list.splice(list.findIndex((l) => l.id === lane.id), 1));
@@ -196,9 +226,12 @@ function AutomationLane({ store, engine, pattern, lane, track, params, used, edi
   return html`
     <div class="automation-lane" style=${`--hue: ${hue(trackIndex)}; --steps: ${length}`}>
       <div class="lane-head">
-        <select value=${lane.param} onChange=${(e) => setParam(e.target.value)} aria-label=${`Automated ${track.name} param`}>
-          ${params.map((p) => html`
-            <option value=${p.name} disabled=${used.has(p.name) && p.name !== lane.param}>${p.label}</option>`)}
+        <select value=${key} onChange=${(e) => setTarget(e.target.value)} aria-label=${`Automated ${track.name} param`}>
+          ${groups.map((g) => html`
+            <optgroup key=${g.label} label=${g.label}>
+              ${g.params.map((p) => html`
+                <option value=${p.key} disabled=${used.has(p.key) && p.key !== key}>${p.label}</option>`)}
+            </optgroup>`)}
         </select>
         <span class="muted readout">${readout}</span>
         <button class="ghost danger" onClick=${remove} aria-label="Remove automation lane">✕</button>

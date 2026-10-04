@@ -4,9 +4,13 @@ import { html, hue, noteName, isBlackKey, useEngineEvent } from '../lib.js';
 import { LIMITS, PATTERN_LENGTHS, newPattern, newId, sequencerOf, pruneAutomation } from '../../shared/song.js';
 import { defaultBounce } from '../../shared/bounce.js';
 import { defaultTubules } from '../../shared/tubules.js';
+import { defaultAnts } from '../../shared/ants.js';
+import { defaultFireflies } from '../../shared/fireflies.js';
 import { plural } from './song-view.js';
 import { BounceEditor } from './bounce-editor.js';
 import { TubuleEditor } from './tubule-editor.js';
+import { AntEditor } from './ant-editor.js';
+import { FireflyEditor } from './firefly-editor.js';
 import { AutomationLanes } from './automation.js';
 
 const VISIBLE_OCTAVES = 2;
@@ -16,6 +20,8 @@ const VISIBLE_OCTAVES = 2;
 const GENERATIVE = {
   bounce: { label: 'Bouncing balls', fresh: defaultBounce, Editor: BounceEditor, summary: (c) => plural(c.balls.length, 'ball') },
   tubules: { label: 'Microtubules', fresh: defaultTubules, Editor: TubuleEditor, summary: (c) => plural(c.rings.length * c.sections, 'zone') },
+  ants: { label: 'Ant colony', fresh: defaultAnts, Editor: AntEditor, summary: (c) => plural(c.ants, 'ant') },
+  fireflies: { label: 'Fireflies', fresh: defaultFireflies, Editor: FireflyEditor, summary: (c) => `${c.flies.length} ${c.flies.length === 1 ? 'firefly' : 'fireflies'}` },
 };
 
 // What Copy took: one track's sequencer in one pattern — its notes, or its
