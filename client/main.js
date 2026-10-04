@@ -10,6 +10,7 @@ import { Profile } from './ui/profile.js';
 import { SongPage } from './ui/player.js';
 import { ChooseUsername } from './ui/choose-username.js';
 import { Settings } from './ui/settings.js';
+import { EmbedPage } from './ui/embed.js';
 import { applyTheme, storedTheme } from './theme.js';
 
 const EDITOR_VIEWS = 'instruments|patterns|song|visuals|publish';
@@ -23,6 +24,7 @@ const EDITOR_VIEWS = 'instruments|patterns|song|visuals|publish';
  *   /settings          theme and account (signed in)
  *   /songs/:id/:view   the editor (signed in)
  *   /sign-in           sign in, then back to ?next=
+ *   /embed/:id         a published song's player alone, for iframes on other sites
  */
 function route(path) {
   let m;
@@ -126,4 +128,8 @@ function App() {
   `;
 }
 
-render(html`<${App} />`, document.getElementById('app'));
+// The embed player stands apart from the app: no session, no header, no
+// navigation, just the song in its frame.
+const embed = /^\/embed\/([0-9a-f-]+)$/.exec(location.pathname);
+if (embed) document.documentElement.classList.add('embedded');
+render(embed ? html`<${EmbedPage} id=${embed[1]} />` : html`<${App} />`, document.getElementById('app'));

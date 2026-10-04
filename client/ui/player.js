@@ -7,6 +7,7 @@ import { VisualCanvas, songTimeline } from './visual-canvas.js';
 import { TagChips } from './genre-picker.js';
 import { fmtTime } from './song-view.js';
 import { useSpaceToPlay } from './editor.js';
+import { ShareMenu } from './share.js';
 
 /**
  * The read-only song page: the song plays live from its document, with
@@ -36,7 +37,12 @@ export function SongPage({ id, user }) {
   return html`<${Player} key=${song.id} song=${song} user=${user} />`;
 }
 
-function Player({ song, user }) {
+/**
+ * A song, ready to play: its engine, its normalized document, and what
+ * the stage and timeline need to follow it. Shared by the song page and
+ * the embed player.
+ */
+export function useSongPlayback(song) {
   const engine = useMemo(() => new Engine(), []);
   // Normalizing fills in params the library has added since the song was
   // saved, so it plays with today's instruments.
@@ -67,11 +73,23 @@ function Player({ song, user }) {
   const toggleRef = useRef(toggle);
   toggleRef.current = toggle;
   useSpaceToPlay(toggleRef);
-  const stageRef = useRef();
-  const { full, idle, toggleFull, onPointerMove } = useFullscreen(stageRef);
 
   const canPlay = doc.arrangement.length > 0;
   const patternIndex = new Map(doc.patterns.map((p, i) => [p.id, i]));
+
+  return {
+    engine, doc, timeline, times, sections, order, total, holdTime, played, playing, playingIndex, section,
+    play, toggle, canPlay, patternIndex,
+  };
+}
+
+function Player({ song, user }) {
+  const {
+    engine, doc, timeline, times, sections, order, total, holdTime, played, playing, playingIndex, section,
+    play, toggle, canPlay, patternIndex,
+  } = useSongPlayback(song);
+  const stageRef = useRef();
+  const { full, idle, toggleFull, onPointerMove } = useFullscreen(stageRef);
 
   return html`
     <main class="song-page">
@@ -114,10 +132,11 @@ function Player({ song, user }) {
           <${TagChips} tags=${song.tags} />
           ${song.description && html`<p class="description">${song.description}</p>`}
         </div>
-        ${song.mine && html`
-          <div class="owner-tools">
-            ${!song.publishedAt && html`<p class="notice">Only you can see this page until you publish.</p>`}
-            <${Link} href=${`/songs/${song.id}/publish`} class="button">Edit in studio</${Link}>
+        ${(song.publishedAt || song.mine) && html`
+          <div class="song-actions">
+            ${song.mine && !song.publishedAt && html`<p class="notice">Only you can see this page until you publish.</p>`}
+            ${song.publishedAt && html`<${ShareMenu} song=${song} />`}
+            ${song.mine && html`<${Link} href=${`/songs/${song.id}/publish`} class="button">Edit in studio</${Link}>`}
           </div>`}
       </header>
       ${!user && html`<p class="muted cta">Made with Vectorfield. <${Link} href="/sign-in?next=/studio">Sign in</${Link}> to make your own.</p>`}
@@ -131,7 +150,7 @@ function Player({ song, user }) {
  * instead. While full, `idle` turns on after the pointer rests a moment, so
  * the button and cursor can get out of the way of the visuals.
  */
-function useFullscreen(ref) {
+export function useFullscreen(ref) {
   const [full, setFull] = useState(false);
   const [idle, setIdle] = useState(false);
   const idleTimer = useRef();
@@ -182,7 +201,7 @@ function useFullscreen(ref) {
 }
 
 /** How long a song is, for one that doesn't just play straight through. */
-const LENGTH_LABEL = { loops: 'loops forever', varies: 'different every play' };
+export const LENGTH_LABEL = { loops: 'loops forever', varies: 'different every play' };
 
 /**
  * The song's blocks as a bar, each as wide as it is long, in its pattern's
@@ -193,7 +212,7 @@ const LENGTH_LABEL = { loops: 'loops forever', varies: 'different every play' };
  * A song that loops or picks its way jumps around the bar as it plays,
  * so in place of a total the time shows ∞ or ~.
  */
-function Timeline({ engine, doc, times, total, order, sections, playingIndex, patternIndex, onSeek }) {
+export function Timeline({ engine, doc, times, total, order, sections, playingIndex, patternIndex, onSeek }) {
   const [time, setTime] = useState(0);
 
   useEffect(() => {

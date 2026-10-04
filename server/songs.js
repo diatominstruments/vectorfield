@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { defaultSong, normalizeSong, SongError, LIMITS } from '../shared/song.js';
 import { TAG_LIMITS, normalizeTags } from '../shared/genres.js';
 import { requireProfile } from './auth.js';
+import { parseCover } from './cover.js';
 
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const DESCRIPTION_LENGTH = 500;
@@ -17,6 +18,7 @@ const description = (x) => (typeof x === 'string' ? x.trim().slice(0, DESCRIPTIO
 export const summary = (r) => ({
   id: r.id, title: r.title, revision: r.revision, updatedAt: r.updated_at,
   description: r.description ?? '', tags: r.tags ?? [], publishedAt: r.published_at ?? null,
+  coverAt: r.cover_at ?? null,
 });
 
 /**
@@ -51,7 +53,11 @@ export function songsRouter(db) {
   });
 
   router.get('/:id', async (req, res) => {
-    const { rows } = await db.query('select * from songs where id = $1 and owner_id = $2', [req.params.id, req.user.id]);
+    const { rows } = await db.query(
+      `select s.*, c.updated_at as cover_at from songs s left join song_covers c on c.song_id = s.id
+       where s.id = $1 and s.owner_id = $2`,
+      [req.params.id, req.user.id],
+    );
     if (!rows[0]) return res.status(404).json({ error: 'Song not found' });
     res.json({ song: { ...summary(rows[0]), doc: rows[0].doc } });
   });
@@ -86,29 +92,45 @@ export function songsRouter(db) {
 
   // Publishing is separate from saving: it's a deliberate act, not an
   // autosave, and it doesn't touch the document or its revision. The same
-  // call updates tags and description whether or not the song is public;
+  // call updates tags, description and picture (`cover`, a frame of the
+  // visuals as a JPEG data URL) whether or not the song is public;
   // `published` flips it, and the original publish date is kept.
   router.put('/:id/publish', async (req, res) => {
     const body = req.body ?? {};
-    const { rows } = await db.query(
-      `update songs set
-         tags = coalesce($3::jsonb, tags),
-         description = coalesce($4, description),
-         published_at = case
-           when $5::boolean is null then published_at
-           when $5 then coalesce(published_at, now())
-           else null end
-       where id = $1 and owner_id = $2
-       returning id, title, revision, updated_at, description, tags, published_at`,
-      [
-        req.params.id, req.user.id,
-        'tags' in body ? JSON.stringify(normalizeTags(body.tags, TAG_LIMITS.perSong)) : null,
-        'description' in body ? description(body.description) : null,
-        typeof body.published === 'boolean' ? body.published : null,
-      ],
-    );
-    if (!rows[0]) return res.status(404).json({ error: 'Song not found' });
-    res.json({ song: summary(rows[0]) });
+    const cover = 'cover' in body ? parseCover(body.cover) : null;
+    if ('cover' in body && !cover) return res.status(400).json({ error: 'The picture must be a JPEG under 64 KB' });
+
+    const song = await db.transaction(async (tx) => {
+      const { rows } = await tx.query(
+        `update songs set
+           tags = coalesce($3::jsonb, tags),
+           description = coalesce($4, description),
+           published_at = case
+             when $5::boolean is null then published_at
+             when $5 then coalesce(published_at, now())
+             else null end
+         where id = $1 and owner_id = $2
+         returning id, title, revision, updated_at, description, tags, published_at`,
+        [
+          req.params.id, req.user.id,
+          'tags' in body ? JSON.stringify(normalizeTags(body.tags, TAG_LIMITS.perSong)) : null,
+          'description' in body ? description(body.description) : null,
+          typeof body.published === 'boolean' ? body.published : null,
+        ],
+      );
+      if (!rows[0]) return null;
+      const covers = cover
+        ? await tx.query(
+          `insert into song_covers (song_id, image) values ($1, $2)
+           on conflict (song_id) do update set image = excluded.image, updated_at = now()
+           returning updated_at`,
+          [req.params.id, cover],
+        )
+        : await tx.query('select updated_at from song_covers where song_id = $1', [req.params.id]);
+      return { ...rows[0], cover_at: covers.rows[0]?.updated_at };
+    });
+    if (!song) return res.status(404).json({ error: 'Song not found' });
+    res.json({ song: summary(song) });
   });
 
   router.delete('/:id', async (req, res) => {

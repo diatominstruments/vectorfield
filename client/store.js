@@ -18,9 +18,10 @@ export class SongStore {
     this.id = song.id;
     this.title = song.title;
     this.revision = song.revision;
-    // Publishing state: tags, description, publishedAt. Changed through
-    // setMeta() after a publish call, never by autosave.
-    this.meta = { tags: song.tags ?? [], description: song.description ?? '', publishedAt: song.publishedAt ?? null };
+    // Publishing state: tags, description, publishedAt, and when the
+    // picture was last chosen. Changed through setMeta() after a publish
+    // call, never by autosave.
+    this.meta = { tags: song.tags ?? [], description: song.description ?? '', publishedAt: song.publishedAt ?? null, coverAt: song.coverAt ?? null };
     // Normalizing on load fills in params the library has added since the
     // song was saved, and drops any it has removed.
     this.doc = normalizeSong(song.doc);
@@ -54,8 +55,8 @@ export class SongStore {
     this.#changed();
   }
 
-  setMeta({ tags, description, publishedAt }) {
-    this.meta = { tags, description, publishedAt };
+  setMeta({ tags, description, publishedAt, coverAt }) {
+    this.meta = { tags, description, publishedAt, coverAt };
     this.#notify();
   }
 

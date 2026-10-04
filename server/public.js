@@ -7,14 +7,15 @@ import { UUID, summary } from './songs.js';
 const PAGE = 20;
 
 /** A song in a feed or on a profile: its summary plus who made it. */
-const card = (r) => ({
+export const card = (r) => ({
   ...summary(r),
   owner: { id: String(r.owner_id), username: r.owner_username, avatarUrl: r.owner_avatar },
 });
 
-const SONG_WITH_OWNER = `
-  select s.*, u.username as owner_username, u.avatar_url as owner_avatar
-  from songs s join users u on u.id = s.owner_id`;
+export const SONG_WITH_OWNER = `
+  select s.*, u.username as owner_username, u.avatar_url as owner_avatar, c.updated_at as cover_at
+  from songs s join users u on u.id = s.owner_id
+  left join song_covers c on c.song_id = s.id`;
 
 /**
  * The public side: what anyone, signed in or not, can read. Published songs

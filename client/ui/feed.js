@@ -2,13 +2,17 @@ import { useEffect, useState } from 'preact/hooks';
 import { html, Link, ago, useTitle } from '../lib.js';
 import { api } from '../api.js';
 import { TagChips } from './genre-picker.js';
+import { coverPath } from '../../shared/embed.js';
 
-/** A published song as feeds and profiles list it. */
+/** A published song as feeds and profiles list it: its picture, then what it is and who made it. */
 export function SongCard({ song, showOwner = true }) {
   return html`
     <li class="song-card">
+      <${Link} href=${`/s/${song.id}`} class="song-card-cover" tabindex="-1" aria-hidden="true">
+        <img src=${coverPath(song.id, song.coverAt)} alt="" loading="lazy" width="480" height="360" />
+        <span class="play-mark">▶</span>
+      </${Link}>
       <${Link} href=${`/s/${song.id}`} class="song-card-main">
-        <span class="play-mark" aria-hidden="true">▶</span>
         <span class="song-card-text">
           <strong>${song.title}</strong>
           ${song.description && html`<span class="song-card-desc">${song.description}</span>`}

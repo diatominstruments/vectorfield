@@ -107,7 +107,7 @@ export function Editor({ songId, view }) {
       ${view === 'song' && html`<${SongView} store=${store} engine=${engine}
         onEditPattern=${(id) => { setPatternId(id); navigate(`/songs/${songId}/patterns`); }} />`}
       ${view === 'visuals' && html`<${VisualsView} store=${store} engine=${engine} />`}
-      ${view === 'publish' && html`<${PublishView} store=${store} />`}
+      ${view === 'publish' && html`<${PublishView} store=${store} engine=${engine} />`}
     </main>
   `;
 }

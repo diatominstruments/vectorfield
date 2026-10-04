@@ -22,3 +22,9 @@ export const isTheme = (id) => THEMES.some((t) => t.id === id);
 
 /** The theme with this id, or the default. */
 export const themeInfo = (id) => THEMES.find((t) => t.id === id) ?? THEMES.find((t) => t.id === DEFAULT_THEME);
+
+/**
+ * A stable, distinct hue per index, for colour-coding patterns and tracks.
+ * Shared so the server's generated cover images match the app's colours.
+ */
+export const hue = (i) => (i * 67 + 170) % 360;

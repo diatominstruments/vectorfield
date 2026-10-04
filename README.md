@@ -78,14 +78,16 @@ npm start        # production server (needs DATABASE_URL and GOOGLE_CLIENT_ID)
 
 ```
 client/            Preact + htm, bundled by esbuild
-  main.js          routes: / feed, /s/:id song page, /u/:username profile, /studio, /songs/:id editor, /settings
+  main.js          routes: / feed, /s/:id song page, /u/:username profile, /studio, /songs/:id editor, /settings, /embed/:id
   theme.js         applies a theme (data-theme on <html>) and remembers it on the device
   engine.js        audio: song doc → live instrument chains + lookahead sequencer
   bounce-sim.js, tubule-sim.js  the generative sequencers — bouncing balls, microtubules — stepped by the engine
   store.js         the song being edited, with debounced autosave
   ui/visual-canvas.js  gloaming-kit on a canvas: analyzes the engine's output, follows its clock
   ui/visuals.js    the editor's visuals tab; ui/player.js the read-only song page
-  ui/feed.js       New / For you; ui/profile.js profiles; ui/publish.js the Publish tab
+  ui/feed.js       New / For you; ui/profile.js profiles; ui/publish.js the Publish tab, picture picker included
+  ui/share.js      the song page's share menu, and turning a frame of the visuals into a picture
+  ui/embed.js      the embed player: just the stage, for an iframe on another site
   ui/genre-picker.js  choosing genres, for a song's tags or a profile's interests
   ui/theme-picker.js  choosing a colour theme, at signup and in ui/settings.js
 shared/song.js     the song document format and its validation — both sides use it
@@ -94,11 +96,14 @@ shared/visuals.js  validation for the visual side: looks and the kit's signal-sp
 shared/genres.js   the electronic music taxonomy (families → genres) used for tags
 shared/users.js    username and profile rules
 shared/themes.js   the colour themes; their tokens are in public/styles.css
+shared/embed.js    embed and picture sizes, and the iframe code, for the share menu and oEmbed alike
 server/            Express 5
   auth.js          Google/Apple ID token → our own session cookie; profile edits
   apple.js         verifies Apple ID tokens against Apple's published keys
   songs.js         the owner's side: CRUD with revision checks, publishing
   public.js        what anyone can read: the feed, profiles, published songs
+  share.js         link previews: song tags in the page head, covers, oEmbed, the embed page
+  cover.js         song pictures: checking picked ones, drawing a default
   migrations/      plain SQL, applied in order
 ```
 
@@ -111,13 +116,26 @@ style override) and the song's base look. See
 the comment at the top of `shared/song.js`.
 
 **Publishing.** A song is private until its owner publishes it from the
-editor's Publish tab, which also sets up to five genre tags (from
+editor's Publish tab, which also sets its picture, up to five genre tags (from
 `shared/genres.js`, where a tag can be a family like "techno" or a genre
-like "dub-techno") and a description. Published songs appear in the feed —
+like "dub-techno") and a description. The picture is a 480×360 frame of
+the song's visuals, picked by playing the song in the tab and catching a
+moment; it's stored as a small JPEG (around 20 KB) and shows on feed cards,
+as the embed player's poster and in link previews. Until one is picked, a
+sketch drawn from the arrangement stands in. Published songs appear in the feed —
 _New_ is everything, _For you_ is what's tagged with genres in the user's
 interests, where liking a family means liking every genre in it — and at
 `/s/:id`, where the song plays live from its document with its visuals.
 Unpublishing takes it out of both.
+
+**Sharing.** A published song's page has a Share menu: its link, buttons
+for Facebook, Reddit and X, and an iframe of `/embed/:id`, a compact player
+with the visuals, to paste into any site that takes HTML. Link previews
+don't run the app, so the server writes the song's Open Graph and Twitter
+tags into the page it sends for `/s/:id`, with the song's picture, and
+oEmbed discovery for sites that turn links into players. Only `/embed/:id` may
+be framed by other sites. Set `PUBLIC_URL` in production so the absolute
+links in previews point at the real origin.
 
 The server runs every save through `normalizeSong()`, which checks shapes,
 ids and limits and clamps every instrument param to the library's schema.

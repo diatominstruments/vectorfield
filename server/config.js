@@ -21,6 +21,12 @@ export const config = {
   // Local-only sign-in without Google, for development. Never in production.
   devLogin: env.DEV_LOGIN === '1' && env.NODE_ENV !== 'production',
 
+  // The site's public origin, like https://vectorfield.example — the base
+  // of the absolute links in share previews and embed codes. Unset, each
+  // request's own host is used, which is right locally but not behind a
+  // proxy that rewrites the host or terminates HTTPS.
+  publicUrl: env.PUBLIC_URL?.replace(/\/+$/, '') || null,
+
   sessionDays: 30,
 };
 

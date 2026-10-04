@@ -77,5 +77,4 @@ const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 export const noteName = (n) => `${NAMES[n % 12]}${Math.floor(n / 12) - 1}`;
 export const isBlackKey = (n) => NAMES[n % 12].length > 1;
 
-/** A stable, distinct hue per index, for colour-coding patterns and tracks. */
-export const hue = (i) => (i * 67 + 170) % 360;
+export { hue } from '../shared/themes.js';

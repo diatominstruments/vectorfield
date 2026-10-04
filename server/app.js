@@ -5,13 +5,15 @@ import { config } from './config.js';
 import { authRouter, sessionMiddleware } from './auth.js';
 import { songsRouter } from './songs.js';
 import { publicRouter } from './public.js';
+import { shareRouter } from './share.js';
 
 const PUBLIC = new URL('../public/', import.meta.url).pathname;
 // The sampler's banks ship inside the instrument library, beside its source.
 const KITS = new URL('kits/', import.meta.resolve('gloaming-instruments')).pathname;
 
 // Google's documented allowances for Identity Services, and Apple's sign-in
-// script; everything else is same-origin only.
+// script; everything else is same-origin only. Only this site may frame its
+// pages, except the embed player, which share.js opens to everyone.
 const CSP = [
   "default-src 'self'",
   "script-src 'self' https://accounts.google.com/gsi/client https://appleid.cdn-apple.com",
@@ -19,6 +21,7 @@ const CSP = [
   'frame-src https://accounts.google.com/gsi/',
   "connect-src 'self' https://accounts.google.com/gsi/",
   "img-src 'self' data: https://*.googleusercontent.com",
+  "frame-ancestors 'self'",
 ].join('; ');
 
 export function createApp(db) {
@@ -58,6 +61,7 @@ export function createApp(db) {
   api.use((_req, res) => res.status(404).json({ error: 'Not found' }));
 
   app.use('/api', api);
+  app.use(shareRouter(db));
   app.use(express.static(PUBLIC));
   app.use('/kits', express.static(KITS), (_req, res) => res.sendStatus(404));
   // Client-side routes all load the one page.
