@@ -353,8 +353,27 @@ input[type=range].centered::-moz-range-progress { background: transparent; }
   display: block; width: 100%; height: 24px; padding: 0 8px; border: 0; border-radius: 0; text-align: left;
   background: transparent; font: 11px ui-monospace, Menlo, monospace; color: var(--muted);
 }
-.row-label.black { background: var(--bg); }
 .row-label:hover { color: var(--fg); }
+/* Pitched rows get a keyboard. Keys are ivory and ebony in every theme, like a piano. */
+.piano-key {
+  --ivory: #e9eaee; --ebony: #1c1d24; --seam: #b4b7c2;
+  display: block; position: relative; width: 100%; height: 24px; padding: 0 6px; border: 0; border-radius: 0;
+  text-align: right; font: 10px ui-monospace, Menlo, monospace; color: #6a6e7c;
+}
+.piano-key.white { background: var(--ivory); }
+.piano-key.white.edge { box-shadow: inset 0 -1px var(--seam); }
+/* A black key over the two white keys it sits between; they meet halfway down its row. */
+.piano-key.black {
+  background: linear-gradient(var(--ivory) calc(50% - 0.5px), var(--seam) 0 calc(50% + 0.5px), var(--ivory) 0);
+}
+.piano-key.black::before {
+  content: ''; position: absolute; inset: 2px 40% 2px 0; border-radius: 0 3px 3px 0;
+  background: var(--ebony); box-shadow: 1px 1px 2px rgb(0 0 0 / 0.35);
+}
+.piano-key.white:hover { background: #d8dae0; }
+.piano-key.black:hover::before { background: #34363f; }
+.piano-key.white:active { background: hsl(var(--hue) var(--tint)); }
+.piano-key.black:active::before { background: hsl(var(--hue) var(--tint)); }
 .cells { flex: 1; min-width: calc(var(--steps) * 22px); touch-action: none; user-select: none; }
 .step-numbers, .row { display: grid; grid-template-columns: repeat(var(--steps), 1fr); }
 .step-numbers { height: 20px; font: 10px ui-monospace, Menlo, monospace; color: var(--muted); }

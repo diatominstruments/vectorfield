@@ -321,9 +321,13 @@ function StepGrid({ store, engine, pattern, track, trackIndex, newLength }) {
       <div class="grid-wrap">
         <div class="labels">
           <div class="corner"></div>
-          ${rows.map((r) => html`
-            <button key=${r.note} class=${`row-label ${r.black ? 'black' : ''}`}
-              onClick=${() => engine.audition(track.id, r.note)}>${r.label}</button>`)}
+          ${rows.map((r) => M.keys
+            ? html`
+              <button key=${r.note} class="row-label"
+                onClick=${() => engine.audition(track.id, r.note)}>${r.label}</button>`
+            : html`
+              <button key=${r.note} class=${pianoKeyClass(r.note)} title=${r.label} aria-label=${r.label}
+                onClick=${() => engine.audition(track.id, r.note)}>${r.note % 12 === 0 ? r.label : ''}</button>`)}
         </div>
         <div class=${`cells ${M.keys ? '' : 'pitched'}`} ref=${gridRef}
           onPointerMove=${onPointerMove} onPointerUp=${onPointerUp} onPointerCancel=${cancelDrag}>
@@ -347,6 +351,16 @@ function StepGrid({ store, engine, pattern, track, trackIndex, newLength }) {
         : 'Click to add a note, or drag to stretch it as you place it. Drag a note to resize it; click it to remove. Shift-click for an accent. On a mono synth, overlapping notes slide.'}</p>
     </div>
   `;
+}
+
+/**
+ * A key on the roll's keyboard. Each row is one pitch, so white keys meet
+ * mid-row on the black keys between them, and on the row edge only below
+ * C and F, where two white keys sit side by side.
+ */
+function pianoKeyClass(note) {
+  if (isBlackKey(note)) return 'piano-key black';
+  return `piano-key white ${note % 12 === 0 || note % 12 === 5 ? 'edge' : ''}`;
 }
 
 /** Start the roll where the track's notes are, or around C3 for an empty one. */
