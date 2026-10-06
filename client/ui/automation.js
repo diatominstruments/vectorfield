@@ -2,7 +2,7 @@ import { useRef, useState } from 'preact/hooks';
 import { registry } from 'gloaming-instruments';
 import { html, hue, useEngineEvent } from '../lib.js';
 import { LIMITS, automatableParams, automationValue, laneTarget, newId } from '../../shared/song.js';
-import { moduleInfo, formatValue, toSlider, toValue } from './params.js';
+import { moduleInfo, instrumentKeys, groupLabel, formatValue, toSlider, toValue } from './params.js';
 
 const LINE_REACH = 10;   // px from the line (or a point) that still counts as on it
 
@@ -18,9 +18,10 @@ const targetKey = (effect, name) => `${effect ?? ''}:${name}`;
  * ('Filter cutoff', not 'Cutoff'; 'Reverb mix', not 'Mix'), primary params
  * first.
  */
-function moduleParams(M, effect, prefix) {
+function moduleParams(M, params, effect, prefix) {
   const info = moduleInfo(M);
-  const groupOf = new Map(info.groups.flatMap((g) => g.params.map((name) => [name, g.label])));
+  const keys = instrumentKeys(M, params);
+  const groupOf = new Map(info.groups.flatMap((g) => g.params.map((name) => [name, groupLabel(g, keys)])));
   return automatableParams(M)
     .map(([name]) => {
       const spec = info.params[name];
@@ -40,13 +41,13 @@ function moduleParams(M, effect, prefix) {
  */
 function laneTargets(track) {
   const M = registry.get(track.instrument.id);
-  const groups = [{ label: moduleInfo(M).label, params: moduleParams(M) }];
+  const groups = [{ label: moduleInfo(M).label, params: moduleParams(M, track.instrument.params) }];
   const kinds = track.effects.map((e) => e.id);
   track.effects.forEach((effect, i) => {
     const E = registry.get(effect.id);
     let name = moduleInfo(E).label;
     if (kinds.filter((k) => k === effect.id).length > 1) name += ` ${kinds.slice(0, i + 1).filter((k) => k === effect.id).length}`;
-    const params = moduleParams(E, effect.uid, name);
+    const params = moduleParams(E, effect.params, effect.uid, name);
     if (params.length) groups.push({ label: name, params });
   });
   return groups;

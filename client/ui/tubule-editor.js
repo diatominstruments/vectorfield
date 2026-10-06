@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { registry } from 'gloaming-instruments';
 import { html, noteName } from '../lib.js';
+import { instrumentKeys } from './params.js';
 import { CORE, SECTIONS, TUBULE_LIMITS, resection, ringAt, ringStart, sectionAt, sectionStart } from '../../shared/tubules.js';
 import { TubuleSim } from '../tubule-sim.js';
 import { Range, mixTint, themeTints } from './bounce-editor.js';
@@ -27,7 +28,7 @@ export function TubuleEditor({ store, engine, pattern, track }) {
   const config = pattern.tubules[track.id];
   const canvasRef = useRef();
   const [picked, setSelected] = useState(null);   // zone being tuned: { ring, section }
-  const M = registry.get(track.instrument.id);
+  const keys = instrumentKeys(registry.get(track.instrument.id), track.instrument.params);
   // A zone removed by an edit is no longer selected.
   const selected = picked && picked.ring < config.rings.length && picked.section < config.sections ? picked : null;
 
@@ -35,7 +36,7 @@ export function TubuleEditor({ store, engine, pattern, track }) {
 
   // Latest props for the draw loop, which outlives any one render.
   const live = useRef();
-  live.current = { config, selected, M, bpm: store.doc.bpm };
+  live.current = { config, selected, keys, bpm: store.doc.bpm };
 
   useEffect(() => {
     let raf;
@@ -58,10 +59,10 @@ export function TubuleEditor({ store, engine, pattern, track }) {
 
   // ---- tuning ------------------------------------------------------------------
 
-  const noteChoices = M?.keys
-    ? Object.entries(M.keys).map(([n, label]) => [Number(n), label])
+  const noteChoices = keys
+    ? Object.entries(keys).map(([n, label]) => [Number(n), label])
     : Array.from({ length: PITCH_RANGE[1] - PITCH_RANGE[0] + 1 }, (_, i) => [PITCH_RANGE[0] + i, noteName(PITCH_RANGE[0] + i)]);
-  const label = (note) => M?.keys?.[note] ?? noteName(note);
+  const label = (note) => keys?.[note] ?? noteName(note);
 
   const pick = (zone) => {
     setSelected(zone);
@@ -82,7 +83,7 @@ export function TubuleEditor({ store, engine, pattern, track }) {
 
   // A new outer ring a fourth above the last (or the next drum sound along), section by section.
   const addRing = () => edit((t) => {
-    const step = M?.keys ? 1 : 5;
+    const step = keys ? 1 : 5;
     t.rings.push(t.rings.at(-1).map((last) => {
       const at = noteChoices.findIndex(([n]) => n === last);
       return at < 0 ? Math.min(127, last + step) : noteChoices[Math.min(noteChoices.length - 1, at + step)][0];
@@ -217,7 +218,7 @@ function tubulesAt(trace, now) {
 
 // ---- drawing ---------------------------------------------------------------------
 
-function draw(canvas, { now, tubules, hits, preview }, { config, selected, M }) {
+function draw(canvas, { now, tubules, hits, preview }, { config, selected, keys }) {
   if (!canvas) return;
   const g = canvas.getContext('2d');
   const W = canvas.width;
@@ -364,7 +365,7 @@ function draw(canvas, { now, tubules, hits, preview }, { config, selected, M }) 
       const a = S === 1 ? -Math.PI / 2 : sectionStart(s, S) + arc / 2;
       const x = C + Math.cos(a) * mid;
       const y = C + Math.sin(a) * mid;
-      const text = M?.keys?.[config.rings[r][s]] ?? noteName(config.rings[r][s]);
+      const text = keys?.[config.rings[r][s]] ?? noteName(config.rings[r][s]);
       const w = g.measureText(text).width + size * 0.6;
       g.fillStyle = panel;
       g.globalAlpha = 0.85;

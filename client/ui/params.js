@@ -11,6 +11,25 @@ export function moduleInfo(M) {
   return infoCache.get(M);
 }
 
+/**
+ * An instrument's keys, { note: label }, as these params set it up. A
+ * sampler's sounds are the bank's it plays, which its static `keys` (the
+ * default bank's) doesn't know. Null for instruments that play pitches.
+ */
+export function instrumentKeys(M, params) {
+  if (!M) return null;
+  const info = moduleInfo(M);
+  const bank = info.banks?.[params?.bank];
+  return bank ? bank.keys : info.keys ?? null;
+}
+
+/**
+ * A group's name for display: a section shaping one key of a kit is named
+ * after the sound on it ('Sub kick'), not the slot it sits on ('Low tom').
+ */
+export const groupLabel = (group, keys) =>
+  (group.notes?.length === 1 && keys?.[group.notes[0]]) || group.label;
+
 // ---- values ------------------------------------------------------------------
 
 const num3 = (v) => {
@@ -70,6 +89,7 @@ function currentPreset(M, presets, params) {
  */
 export function ParamPanel({ module: M, params, onChange, compact = false }) {
   const info = moduleInfo(M);
+  const keys = instrumentKeys(M, params);
 
   if (compact) {
     // Out of their groups, labels need the group to make sense: 'Kick tune', not 'Tune'.
@@ -77,8 +97,9 @@ export function ParamPanel({ module: M, params, onChange, compact = false }) {
       .filter((name) => info.params[name].primary)
       .map((name) => {
         const spec = info.params[name];
-        const label = spec.label.toLowerCase().startsWith(group.label.toLowerCase())
-          ? spec.label : `${group.label} ${spec.label.toLowerCase()}`;
+        const heading = groupLabel(group, keys);
+        const label = spec.label.toLowerCase().startsWith(heading.toLowerCase())
+          ? spec.label : `${heading} ${spec.label.toLowerCase()}`;
         return [name, { ...spec, label }];
       }));
     return html`
@@ -105,7 +126,7 @@ export function ParamPanel({ module: M, params, onChange, compact = false }) {
         </label>`}
       ${info.groups.map((group) => html`
         <section class="group" key=${group.id}>
-          ${headings && html`<h4>${group.label}</h4>`}
+          ${headings && html`<h4>${groupLabel(group, keys)}</h4>`}
           <${RoleGraph} group=${group} params=${params} />
           ${group.params.map((name) => html`
             <${ParamRow} key=${name} name=${name} spec=${info.params[name]} params=${params} onChange=${onChange} />`)}

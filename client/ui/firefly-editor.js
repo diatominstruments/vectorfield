@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { registry } from 'gloaming-instruments';
 import { html, noteName } from '../lib.js';
+import { instrumentKeys } from './params.js';
 import { FIREFLY_LIMITS, FLY_RADIUS, QUANTIZE } from '../../shared/fireflies.js';
 import { nextScaleNote } from '../../shared/scale.js';
 import { newId } from '../../shared/song.js';
@@ -39,7 +40,7 @@ export function FireflyEditor({ store, engine, pattern, track }) {
   const gesture = useRef(null);
   const hover = useRef(null);
   const [picked, setSelected] = useState(null);   // firefly id
-  const M = registry.get(track.instrument.id);
+  const keys = instrumentKeys(registry.get(track.instrument.id), track.instrument.params);
   // A firefly removed by an edit is no longer selected.
   const selected = config.flies.find((f) => f.id === picked) ?? null;
 
@@ -47,7 +48,7 @@ export function FireflyEditor({ store, engine, pattern, track }) {
 
   // Latest props for the draw loop, which outlives any one render.
   const live = useRef();
-  live.current = { config, selected, M, bpm: store.doc.bpm, length: pattern.length };
+  live.current = { config, selected, keys, bpm: store.doc.bpm, length: pattern.length };
 
   useEffect(() => {
     let raf;
@@ -64,8 +65,8 @@ export function FireflyEditor({ store, engine, pattern, track }) {
 
   // ---- tuning ------------------------------------------------------------------
 
-  const noteChoices = M?.keys
-    ? Object.entries(M.keys).map(([n, label]) => [Number(n), label])
+  const noteChoices = keys
+    ? Object.entries(keys).map(([n, label]) => [Number(n), label])
     : Array.from({ length: PITCH_RANGE[1] - PITCH_RANGE[0] + 1 }, (_, i) => [PITCH_RANGE[0] + i, noteName(PITCH_RANGE[0] + i)]);
 
   const select = (id) => {
@@ -85,7 +86,7 @@ export function FireflyEditor({ store, engine, pattern, track }) {
   const addFly = (at) => {
     const id = newId();
     const notes = config.flies.map((f) => f.note);
-    const note = nextScaleNote(notes, notes.length ? Math.min(...notes) : 60, M?.keys);
+    const note = nextScaleNote(notes, notes.length ? Math.min(...notes) : 60, keys);
     const rate = config.flies.length ? config.flies.reduce((s, f) => s + f.rate, 0) / config.flies.length : 0.5;
     edit((c) => { c.flies.push({ id, x: at.x, y: at.y, note, rate: Number(rate.toFixed(3)) }); });
     setSelected(id);
@@ -253,7 +254,7 @@ function seedOf(id) {
   return n / 1000;
 }
 
-function draw(canvas, { now, hits }, { config, selected, M }, gesture, hover) {
+function draw(canvas, { now, hits }, { config, selected, keys }, gesture, hover) {
   if (!canvas) return;
   const g = canvas.getContext('2d');
   const W = canvas.width;
@@ -331,7 +332,7 @@ function draw(canvas, { now, hits }, { config, selected, M }, gesture, hover) {
       g.stroke();
     }
     g.fillStyle = glow > 0.3 ? fg : muted;
-    g.fillText(M?.keys?.[f.note] ?? noteName(f.note), x, y + r * 1.6);
+    g.fillText(keys?.[f.note] ?? noteName(f.note), x, y + r * 1.6);
   }
   g.restore();
 }

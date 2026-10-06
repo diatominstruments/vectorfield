@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { registry } from 'gloaming-instruments';
 import { html, noteName } from '../lib.js';
+import { instrumentKeys } from './params.js';
 import { ANT_LIMITS, NODE_RADIUS, QUANTIZE, nextNote, pathKey } from '../../shared/ants.js';
 import { newId } from '../../shared/song.js';
 import { AntSim } from '../ant-sim.js';
@@ -37,7 +38,7 @@ export function AntEditor({ store, engine, pattern, track }) {
   const gesture = useRef(null);
   const hover = useRef(null);
   const [picked, setSelected] = useState(null);   // node id
-  const M = registry.get(track.instrument.id);
+  const keys = instrumentKeys(registry.get(track.instrument.id), track.instrument.params);
   // A node removed by an edit is no longer selected.
   const selected = config.nodes.find((n) => n.id === picked) ?? null;
 
@@ -45,7 +46,7 @@ export function AntEditor({ store, engine, pattern, track }) {
 
   // Latest props for the draw loop, which outlives any one render.
   const live = useRef();
-  live.current = { config, selected, M, bpm: store.doc.bpm };
+  live.current = { config, selected, keys, bpm: store.doc.bpm };
 
   useEffect(() => {
     let raf;
@@ -68,8 +69,8 @@ export function AntEditor({ store, engine, pattern, track }) {
 
   // ---- tuning ------------------------------------------------------------------
 
-  const noteChoices = M?.keys
-    ? Object.entries(M.keys).map(([n, label]) => [Number(n), label])
+  const noteChoices = keys
+    ? Object.entries(keys).map(([n, label]) => [Number(n), label])
     : Array.from({ length: PITCH_RANGE[1] - PITCH_RANGE[0] + 1 }, (_, i) => [PITCH_RANGE[0] + i, noteName(PITCH_RANGE[0] + i)]);
 
   const select = (id) => {
@@ -97,7 +98,7 @@ export function AntEditor({ store, engine, pattern, track }) {
   // A node at `at`, tuned to the next note up; a web's first node is its nest.
   const addNode = (at, joinTo = null) => {
     const id = newId();
-    const note = nextNote(config, M?.keys);
+    const note = nextNote(config, keys);
     edit((a) => {
       a.nodes.push({ id, x: at.x, y: at.y, note });
       if (!a.nest) a.nest = id;
@@ -323,7 +324,7 @@ function colonyAt(trace, now) {
 
 // ---- drawing ---------------------------------------------------------------------
 
-function draw(canvas, { now, ants, scent, hits }, { config, selected, M }, gesture, hover) {
+function draw(canvas, { now, ants, scent, hits }, { config, selected, keys }, gesture, hover) {
   if (!canvas) return;
   const g = canvas.getContext('2d');
   const W = canvas.width;
@@ -425,7 +426,7 @@ function draw(canvas, { now, ants, scent, hits }, { config, selected, M }, gestu
     // Lit up, a node is as bright as the accent, so its label takes the accent's text colour.
     g.fillStyle = glow > 0.3 ? onAccent : n.id === config.food ? fg : muted;
     g.font = `${W / 42}px ui-monospace, Menlo, monospace`;
-    g.fillText(M?.keys?.[n.note] ?? noteName(n.note), x, y);
+    g.fillText(keys?.[n.note] ?? noteName(n.note), x, y);
     if (n.id === config.nest || n.id === config.food) {
       g.fillStyle = muted;
       g.font = `${W / 56}px ui-monospace, Menlo, monospace`;

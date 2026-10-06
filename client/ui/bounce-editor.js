@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { registry } from 'gloaming-instruments';
 import { html, noteName } from '../lib.js';
+import { instrumentKeys } from './params.js';
 import { BALL_RADIUS, BOUNCE_LIMITS, QUANTIZE, SEGMENTS, newBall } from '../../shared/bounce.js';
 import { newId } from '../../shared/song.js';
 
@@ -26,13 +27,13 @@ export function BounceEditor({ store, engine, pattern, track }) {
   const canvasRef = useRef();
   const gesture = useRef(null);
   const [selected, setSelected] = useState(-1);   // wall segment being tuned
-  const M = registry.get(track.instrument.id);
+  const keys = instrumentKeys(registry.get(track.instrument.id), track.instrument.params);
 
   const edit = (fn) => store.edit((d) => fn(d.patterns.find((p) => p.id === pattern.id).bounce[track.id], d));
 
   // Latest props for the draw loop, which outlives any one render.
   const live = useRef();
-  live.current = { config, selected, M };
+  live.current = { config, selected, keys };
 
   useEffect(() => {
     let raf;
@@ -94,8 +95,8 @@ export function BounceEditor({ store, engine, pattern, track }) {
 
   // ---- tuning ------------------------------------------------------------------
 
-  const noteChoices = M?.keys
-    ? Object.entries(M.keys).map(([n, label]) => [Number(n), label])
+  const noteChoices = keys
+    ? Object.entries(keys).map(([n, label]) => [Number(n), label])
     : Array.from({ length: PITCH_RANGE[1] - PITCH_RANGE[0] + 1 }, (_, i) => [PITCH_RANGE[0] + i, noteName(PITCH_RANGE[0] + i)]);
 
   const tune = (segment, note) => {
@@ -182,7 +183,7 @@ function ballsAt(trace, now) {
   });
 }
 
-function draw(canvas, trace, engine, { config, selected, M }, gesture) {
+function draw(canvas, trace, engine, { config, selected, keys }, gesture) {
   if (!canvas) return;
   const g = canvas.getContext('2d');
   const W = canvas.width;
@@ -236,7 +237,7 @@ function draw(canvas, trace, engine, { config, selected, M }, gesture) {
     g.translate(px(lx), px(ly));
     if (mx === 0) g.rotate(-Math.PI / 2);
     if (mx === 1) g.rotate(Math.PI / 2);
-    g.fillText(M?.keys?.[note] ?? noteName(note), 0, 0);
+    g.fillText(keys?.[note] ?? noteName(note), 0, 0);
     g.restore();
   });
 

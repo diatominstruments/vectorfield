@@ -2,7 +2,7 @@ import { useState } from 'preact/hooks';
 import { registry, matches } from 'gloaming-instruments';
 import { html, hue } from '../lib.js';
 import { LIMITS, GENERATIVE_SEQUENCERS, instrumentTypes, effectTypes, moduleLabel, moduleEntry, newEffect, newTrack, pruneAutomation } from '../../shared/song.js';
-import { ParamPanel, moduleInfo } from './params.js';
+import { ParamPanel, moduleInfo, instrumentKeys } from './params.js';
 import { ModulePicker } from './module-picker.js';
 
 /** The note to audition a track with: its first named key, or middle C. */
@@ -35,7 +35,7 @@ function TrackCard({ track, index, store, engine }) {
 
   const changeInstrument = (id) => {
     // Notes written for a drum kit's keys mean nothing to a synth, and vice versa.
-    const kindChanges = Boolean(registry.get(id).keys) !== Boolean(M.keys);
+    const kindChanges = Boolean(registry.get(id).keys) !== Boolean(instrumentKeys(M, track.instrument.params));
     if (kindChanges && noteCount && !confirm('Switching between drums and a pitched instrument keeps the notes, but they may not make sense. Continue?')) return;
     // Automation of params the new instrument doesn't have goes.
     edit((t, d) => { t.instrument = moduleEntry(id); pruneAutomation(d); });

@@ -12,6 +12,7 @@ import { TubuleEditor } from './tubule-editor.js';
 import { AntEditor } from './ant-editor.js';
 import { FireflyEditor } from './firefly-editor.js';
 import { AutomationLanes } from './automation.js';
+import { instrumentKeys } from './params.js';
 
 const VISIBLE_OCTAVES = 2;
 
@@ -24,6 +25,9 @@ const GENERATIVE = {
   fireflies: { label: 'Fireflies', fresh: defaultFireflies, Editor: FireflyEditor, summary: (c) => `${c.flies.length} ${c.flies.length === 1 ? 'firefly' : 'fireflies'}` },
 };
 
+/** The keys of a track's instrument, as its params set it up; see instrumentKeys. */
+const trackKeys = (track) => instrumentKeys(registry.get(track.instrument.id), track.instrument.params);
+
 // What Copy took: one track's sequencer in one pattern — its notes, or its
 // generative settings. Kept for the session, so it can be pasted onto any
 // track in any pattern, even in another song.
@@ -34,7 +38,7 @@ export function PatternsView({ store, engine, pattern, onSelect }) {
   const [trackId, setTrackId] = useState(doc.tracks[0]?.id);
   const [newLength, setNewLength] = useState(1);
   const track = doc.tracks.find((t) => t.id === trackId) ?? doc.tracks[0];
-  const pitched = track && !registry.get(track.instrument.id).keys;
+  const pitched = track && !trackKeys(track);
   const kind = track && pattern ? sequencerOf(pattern, track.id) : 'steps';
   const generative = GENERATIVE[kind];
   const [copied, setCopied] = useState(clipboard);
@@ -45,7 +49,7 @@ export function PatternsView({ store, engine, pattern, onSelect }) {
     const p = d.patterns.find((x) => x.id === pattern.id);
     if (GENERATIVE[next]) {
       p.sequencers[track.id] = next;
-      p[next][track.id] ??= GENERATIVE[next].fresh(registry.get(track.instrument.id).keys);
+      p[next][track.id] ??= GENERATIVE[next].fresh(trackKeys(track));
     } else {
       delete p.sequencers[track.id];
     }
@@ -56,7 +60,7 @@ export function PatternsView({ store, engine, pattern, onSelect }) {
       kind,
       data: structuredClone(generative ? pattern[kind][track.id] : pattern.notes[track.id] ?? []),
       from: `${track.name} · ${pattern.name}`,
-      drums: Boolean(registry.get(track.instrument.id).keys),
+      drums: Boolean(trackKeys(track)),
     };
     setCopied(clipboard);
   };
@@ -226,24 +230,24 @@ const NOTE_LENGTHS = [[1, '1/16'], [2, '1/8'], [4, '1/4'], [8, '1/2'], [16, '1 b
  *   shift-click             accent
  */
 function StepGrid({ store, engine, pattern, track, trackIndex, newLength }) {
-  const M = registry.get(track.instrument.id);
-  const [baseOctave, setBaseOctave] = useState(M.keys ? 0 : defaultOctave(pattern.notes[track.id]));
+  const keys = trackKeys(track);
+  const [baseOctave, setBaseOctave] = useState(keys ? 0 : defaultOctave(pattern.notes[track.id]));
   const gridRef = useRef();
   const drag = useRef(null);
   const position = useEngineEvent(engine, 'position', engine.position);
   const playStep = position?.patternId === pattern.id ? position.step : -1;
 
   const notes = pattern.notes[track.id] ?? [];
-  const rows = M.keys
-    ? Object.entries(M.keys).map(([note, label]) => ({ note: Number(note), label }))
+  const rows = keys
+    ? Object.entries(keys).map(([note, label]) => ({ note: Number(note), label }))
     : Array.from({ length: VISIBLE_OCTAVES * 12 }, (_, i) => {
       const note = (baseOctave + 1) * 12 + VISIBLE_OCTAVES * 12 - 1 - i;
       return { note, label: noteName(note), black: isBlackKey(note) };
     });
   const lo = rows.at(-1).note;
   const hi = rows[0].note;
-  const above = M.keys ? 0 : notes.filter((n) => n.note > hi).length;
-  const below = M.keys ? 0 : notes.filter((n) => n.note < lo).length;
+  const above = keys ? 0 : notes.filter((n) => n.note > hi).length;
+  const below = keys ? 0 : notes.filter((n) => n.note < lo).length;
 
   const editNotes = (fn) => store.edit((d) => {
     const p = d.patterns.find((x) => x.id === pattern.id);
@@ -272,17 +276,17 @@ function StepGrid({ store, engine, pattern, track, trackIndex, newLength }) {
     const step = stepAt(e.clientX);
     const hit = notes.find((n) => n.note === note && n.step <= step && step < n.step + n.length);
 
-    if (hit && M.keys) return removeNote(note, hit.step);
+    if (hit && keys) return removeNote(note, hit.step);
     if (hit) {
       // Nothing changes yet: moving makes this a resize, releasing in place a removal.
       drag.current = { note, start: hit.step, length: hit.length, max: roomAfter(note, hit.step), downStep: step, moved: false, existing: true };
     } else {
       if (notes.length >= LIMITS.notesPerTrack) return;
       const velocity = e.shiftKey ? 1 : 0.75;
-      const length = M.keys ? 1 : Math.min(newLength, roomAfter(note, step));
+      const length = keys ? 1 : Math.min(newLength, roomAfter(note, step));
       editNotes((list) => [...list, { step, note, velocity, length }]);
       engine.audition(track.id, note, velocity);
-      if (M.keys) return;
+      if (keys) return;
       drag.current = { note, start: step, length, max: roomAfter(note, step), downStep: step, moved: false, existing: false };
     }
     gridRef.current.setPointerCapture(e.pointerId);
@@ -319,7 +323,7 @@ function StepGrid({ store, engine, pattern, track, trackIndex, newLength }) {
 
   return html`
     <div class="step-grid" style=${`--hue: ${hue(trackIndex)}; --steps: ${pattern.length}`}>
-      ${!M.keys && html`
+      ${!keys && html`
         <div class="octave">
           <button class="ghost" disabled=${baseOctave >= 7} onClick=${() => setBaseOctave(baseOctave + 1)}>▲ Octave ${above ? html`<em>${above} above</em>` : ''}</button>
           <button class="ghost" disabled=${baseOctave <= 0} onClick=${() => setBaseOctave(baseOctave - 1)}>▼ Octave ${below ? html`<em>${below} below</em>` : ''}</button>
@@ -327,7 +331,7 @@ function StepGrid({ store, engine, pattern, track, trackIndex, newLength }) {
       <div class="grid-wrap">
         <div class="labels">
           <div class="corner"></div>
-          ${rows.map((r) => M.keys
+          ${rows.map((r) => keys
             ? html`
               <button key=${r.note} class="row-label"
                 onClick=${() => engine.audition(track.id, r.note)}>${r.label}</button>`
@@ -335,7 +339,7 @@ function StepGrid({ store, engine, pattern, track, trackIndex, newLength }) {
               <button key=${r.note} class=${pianoKeyClass(r.note)} title=${r.label} aria-label=${r.label}
                 onClick=${() => engine.audition(track.id, r.note)}>${r.note % 12 === 0 ? r.label : ''}</button>`)}
         </div>
-        <div class=${`cells ${M.keys ? '' : 'pitched'}`} ref=${gridRef}
+        <div class=${`cells ${keys ? '' : 'pitched'}`} ref=${gridRef}
           onPointerMove=${onPointerMove} onPointerUp=${onPointerUp} onPointerCancel=${cancelDrag}>
           <div class="step-numbers">
             ${Array.from({ length: pattern.length }, (_, s) => html`
@@ -352,7 +356,7 @@ function StepGrid({ store, engine, pattern, track, trackIndex, newLength }) {
             </div>`)}
         </div>
       </div>
-      <p class="hint muted">${M.keys
+      <p class="hint muted">${keys
         ? 'Click to add or remove a hit; drum hits are one-shots, so they have no length. Shift-click for an accent.'
         : 'Click to add a note, or drag to stretch it as you place it. Drag a note to resize it; click it to remove. Shift-click for an accent. On a mono synth, overlapping notes slide.'}</p>
     </div>
