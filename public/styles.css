@@ -611,6 +611,9 @@ input[type=range].centered::-moz-range-progress { background: transparent; }
 .panel .field.overridden > span { color: var(--fg); }
 .panel .field.overridden > span::after { content: ' •'; color: var(--accent); }
 .panel input[type=color] { width: 100%; height: 28px; padding: 2px; }
+.panel input[type=color]:disabled { opacity: 0.35; }
+.panel .optional-color { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.panel .optional-color input[type=checkbox] { margin: 0; }
 .panel input[type=range] { width: 100%; min-width: 0; }
 .panel .reset { padding: 0 6px; }
 .panel .glyph-field { align-items: start; }

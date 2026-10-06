@@ -14,11 +14,22 @@ const BAND_LABELS = {
 };
 const bandLabel = (b) => BAND_LABELS[b] ?? b;
 const TRIGGERS = DEFAULT_TRIGGERS.map((t) => t.name);
-const triggerLabel = (t) => ({ bass: 'Bass hit', snare: 'Snare hit', hihat: 'Hi-hat hit' }[t] ?? `${t} hit`);
+const TRIGGER_LABELS = {
+  sub: 'Sub drop', bass: 'Bass hit', tom: 'Tom hit', snare: 'Snare hit', clap: 'Clap hit', hihat: 'Hi-hat hit',
+  onset: 'Any hit', loud: 'Loud surge', lull: 'Quiet passage',
+};
+const triggerLabel = (t) => TRIGGER_LABELS[t] ?? `${t} hit`;
 
 const STYLE_LABELS = {
-  background: 'Background', lineColor: 'Line', accentColor: 'Accent', lineWidth: 'Line width', shadowBlur: 'Glow',
+  background: 'Background', lineColor: 'Line', accentColor: 'Accent', peakColor: 'Peak',
+  peakAbove: 'Peak above', lineWidth: 'Line width', shadowBlur: 'Glow',
 };
+
+/** The peak colour a look starts from when it's switched on. */
+const PEAK_ON = '#ffffff';
+
+/** A number shown to the precision its slider steps in: 28, 1.4, 0.028. */
+const fmt = (value, step) => Number(value).toFixed(step >= 1 ? 0 : Math.min(3, Math.ceil(-Math.log10(step) - 1e-9)));
 
 // ---- level specs ↔ form ----------------------------------------------------------
 //
@@ -73,7 +84,7 @@ function Slider({ label, min, max, step = 0.01, value, unit = '', onInput }) {
     <label class="slider">
       <span>${label}</span>
       <input type="range" min=${min} max=${max} step=${step} value=${value} onInput=${(e) => onInput(Number(e.target.value))} />
-      <output>${Number(value).toFixed(step < 0.1 ? 2 : 1)}${unit}</output>
+      <output>${fmt(value, step)}${unit}</output>
     </label>`;
 }
 
@@ -273,12 +284,15 @@ function OptionField({ name, def, value, onChange }) {
   }
   if (def?.kind === 'number') {
     const { min = 0, max = 1, step = 0.01 } = def;
-    const shown = value ?? def.default ?? min;
+    // A song saved before an option became a number may hold one of its old
+    // names ('fast'); the kit still reads those, so show it as is.
+    const numeric = value !== undefined && Number.isFinite(Number(value));
+    const shown = numeric ? Number(value) : def.default ?? min;
     return html`
       <label class="field">
         <span>${name}</span>
         <input type="range" min=${min} max=${max} step=${step} value=${shown} onInput=${(e) => onChange(Number(e.target.value))} />
-        <output>${Number(shown).toFixed(step < 0.1 ? 2 : 1)}</output>
+        <output>${value !== undefined && !numeric ? value : fmt(shown, step)}</output>
         <button class="ghost reset" disabled=${value === undefined} onClick=${(e) => { e.preventDefault(); onChange(''); }}
           title="Use the default">↺</button>
       </label>`;
@@ -364,7 +378,29 @@ export function VisualPanel({ visual, blockLabel, onChange, onRemove, onMove, ca
  */
 export function LookPanel({ title, hint, style, inherited, onChange }) {
   const isBlock = Boolean(inherited);
-  const value = (key) => style?.[key] ?? inherited?.[key] ?? DEFAULT_LOOK[key];
+  // Not `??`: a null peakColor is a setting (off), not a missing one.
+  const value = (key) => [style?.[key], inherited?.[key]].find((v) => v !== undefined) ?? DEFAULT_LOOK[key];
+  const peakOff = value('peakColor') === null;
+  const control = (key, rule) => {
+    if (rule === 'color?') {
+      return html`
+        <span class="optional-color">
+          <input type="checkbox" checked=${!peakOff} aria-label=${`${STYLE_LABELS[key]} on`}
+            onChange=${(e) => onChange(key, e.target.checked ? PEAK_ON : null)} />
+          <input type="color" value=${value(key) ?? PEAK_ON} disabled=${value(key) === null}
+            onInput=${(e) => onChange(key, e.target.value)} />
+        </span>`;
+    }
+    if (rule === 'color') return html`<input type="color" value=${value(key)} onInput=${(e) => onChange(key, e.target.value)} />`;
+    const [min, max, step] = rule;
+    return html`<input type="range" min=${min} max=${max} step=${step} value=${value(key)}
+      disabled=${key === 'peakAbove' && peakOff} onInput=${(e) => onChange(key, Number(e.target.value))} />`;
+  };
+  const shown = (key, rule) => {
+    const v = value(key);
+    if (typeof rule === 'string') return v ?? 'off';
+    return fmt(v, rule[2]);
+  };
 
   return html`
     <div class="panel look-panel">
@@ -375,11 +411,8 @@ export function LookPanel({ title, hint, style, inherited, onChange }) {
         return html`
           <label class=${`field ${overridden ? 'overridden' : ''}`} key=${key}>
             <span>${STYLE_LABELS[key]}</span>
-            ${rule === 'color'
-              ? html`<input type="color" value=${value(key)} onInput=${(e) => onChange(key, e.target.value)} />`
-              : html`<input type="range" min=${rule[0]} max=${rule[1]} step="0.5" value=${value(key)}
-                  onInput=${(e) => onChange(key, Number(e.target.value))} />`}
-            <output>${rule === 'color' ? value(key) : value(key)}</output>
+            ${control(key, rule)}
+            <output>${shown(key, rule)}</output>
             ${isBlock && html`<button class="ghost reset" disabled=${!overridden} onClick=${(e) => { e.preventDefault(); onChange(key, undefined); }}
               title="Use the song look">↺</button>`}
           </label>`;

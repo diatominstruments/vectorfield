@@ -3,7 +3,7 @@
  * is browser-only). Everything here is plain data the kit consumes as-is:
  *
  *   look:  the song's base style — { background, lineColor, accentColor,
- *          lineWidth, shadowBlur }
+ *          peakColor, peakAbove, lineWidth, shadowBlur }
  *   each arrangement block may carry
  *     visuals: [{ id, viz, bind, options }]   kit timeline entries
  *     style:   partial look, overriding the song's from that block on,
@@ -20,24 +20,30 @@ import { SongError } from './errors.js';
 // Mirrors of the kit's BANDS and DEFAULT_TRIGGERS names. The editor reads
 // the real ones from the kit; these only bound what a saved song may name.
 export const BAND_NAMES = ['subBass', 'bass', 'lowMid', 'mid', 'highMid', 'treble'];
-export const TRIGGER_NAMES = ['bass', 'snare', 'hihat'];
+export const TRIGGER_NAMES = ['sub', 'bass', 'tom', 'snare', 'clap', 'hihat', 'onset', 'loud', 'lull'];
 
 export const VISUAL_LIMITS = Object.freeze({
   perBlock: 6, bindSlots: 16, options: 8, specDepth: 4, specParts: 8, gridSize: 32,
 });
 
+// 'color' is #rrggbb; 'color?' may also be null, which for peakColor means
+// off (the kit draws no third colour). Numbers are [min, max, step].
 export const STYLE_KEYS = {
   background: 'color',
   lineColor: 'color',
   accentColor: 'color',
-  lineWidth: [0.5, 8],
-  shadowBlur: [0, 40],
+  peakColor: 'color?',
+  peakAbove: [0, 1, 0.05],
+  lineWidth: [0.5, 8, 0.5],
+  shadowBlur: [0, 40, 0.5],
 };
 
 export const DEFAULT_LOOK = Object.freeze({
   background: '#0a0a12',
   lineColor: '#7fffd4',
   accentColor: '#ff5d8f',
+  peakColor: null,
+  peakAbove: 0.8,
   lineWidth: 2,
   shadowBlur: 0,
 });
@@ -54,8 +60,9 @@ export function normalizeStyle(style, { complete = false } = {}) {
   if (isObj(style)) {
     for (const [key, rule] of Object.entries(STYLE_KEYS)) {
       const v = style[key];
-      if (rule === 'color' ? typeof v === 'string' && COLOR.test(v) : typeof v === 'number' && Number.isFinite(v)) {
-        out[key] = rule === 'color' ? v.toLowerCase() : clampNum(v, ...rule);
+      if (rule === 'color?' && v === null) out[key] = null;
+      else if (typeof rule === 'string' ? typeof v === 'string' && COLOR.test(v) : typeof v === 'number' && Number.isFinite(v)) {
+        out[key] = typeof rule === 'string' ? v.toLowerCase() : clampNum(v, rule[0], rule[1]);
       }
     }
   }

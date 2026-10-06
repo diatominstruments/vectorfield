@@ -98,6 +98,34 @@ test('visuals: grid options keep their drawing, bounded', () => {
   assert.deepEqual(clean.visuals[0].options, { glyph, matrix: ['012', '990'] });
 });
 
+test('visuals: every kit trigger can drive a slot', () => {
+  const song = sampleSong();
+  const [block] = song.arrangement;
+  block.visuals[0].bind = { ring: 'onset', glow: { trigger: 'lull', decay: 0.3 }, flash: { trigger: 'clap', decay: 4 } };
+  const clean = normalizeSong(song).arrangement[0];
+  assert.deepEqual(clean.visuals[0].bind, block.visuals[0].bind);
+});
+
+test('the look: peak colour is a colour or off, its knee clamped', () => {
+  const song = sampleSong();
+  delete song.look.peakColor;
+  delete song.look.peakAbove;
+  let clean = normalizeSong(song);
+  assert.equal(clean.look.peakColor, null);   // off unless a song turns it on
+  assert.equal(clean.look.peakAbove, 0.8);
+
+  song.look.peakColor = '#FFFFFF';
+  song.look.peakAbove = 3;
+  song.arrangement[0].style = { peakColor: null };   // a block can switch it off again
+  clean = normalizeSong(song);
+  assert.equal(clean.look.peakColor, '#ffffff');
+  assert.equal(clean.look.peakAbove, 1);
+  assert.deepEqual(clean.arrangement[0].style, { peakColor: null });
+
+  song.arrangement[0].style = { peakColor: 'red', lineColor: null };
+  assert.equal(normalizeSong(song).arrangement[0].style, null);
+});
+
 test('block times follow pattern lengths and tempo', () => {
   const song = sampleSong();
   song.arrangement.push({ ...song.arrangement[0], id: 'second' });
