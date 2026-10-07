@@ -20,6 +20,7 @@ const EDITOR_VIEWS = 'instruments|patterns|song|visuals|publish';
  *   /                  the feed (everyone)
  *   /s/:id             a published song, playing live (everyone)
  *   /u/:username       a profile (everyone)
+ *   /u/:username/likes the songs they've liked (everyone)
  *   /studio            your songs (signed in)
  *   /settings          theme and account (signed in)
  *   /songs/:id/:view   the editor (signed in)
@@ -33,7 +34,7 @@ function route(path) {
   if (path === '/studio') return { name: 'studio', auth: true };
   if (path === '/settings') return { name: 'settings', auth: true };
   if ((m = /^\/s\/([0-9a-f-]+)$/.exec(path))) return { name: 'song', id: m[1] };
-  if ((m = /^\/u\/([a-z0-9_]+)$/i.exec(path))) return { name: 'profile', username: m[1].toLowerCase() };
+  if ((m = /^\/u\/([a-z0-9_]+)(?:\/(likes))?$/i.exec(path))) return { name: 'profile', username: m[1].toLowerCase(), tab: m[2] ?? 'songs' };
   if ((m = new RegExp(`^/songs/([0-9a-f-]+)(?:/(${EDITOR_VIEWS}))?$`).exec(path))) return { name: 'editor', id: m[1], view: m[2] ?? 'instruments', auth: true };
   return { name: 'missing' };
 }
@@ -100,7 +101,7 @@ function App() {
   } else if (r.name === 'song') {
     page = html`<${SongPage} key=${r.id} id=${r.id} user=${user} />`;
   } else if (r.name === 'profile') {
-    page = html`<${Profile} key=${r.username} username=${r.username} user=${user} onUserChange=${setUser} />`;
+    page = html`<${Profile} key=${r.username} username=${r.username} tab=${r.tab} user=${user} onUserChange=${setUser} />`;
   } else {
     page = html`<main class="missing"><p class="error">There's nothing at ${path}.</p><${Link} href="/">Back to the feed</${Link}></main>`;
   }

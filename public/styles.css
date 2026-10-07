@@ -714,6 +714,7 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent); cur
 .song-card-text strong { font-size: 15px; }
 .song-card-desc { color: var(--muted); font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .song-card-meta { display: flex; flex-wrap: wrap; align-items: center; align-self: end; gap: 6px 12px; font-size: 13px; }
+.song-card-meta .like-count { font-variant-numeric: tabular-nums; }
 @media (max-width: 520px) {
   .song-card { grid-template-columns: 96px minmax(0, 1fr); }
 }
@@ -826,6 +827,13 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent); cur
 .song-head .description { margin: 12px 0 0; max-width: 60ch; white-space: pre-wrap; color: var(--fg); }
 .song-actions { flex: none; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; max-width: 50%; font-size: 13px; }
 .song-actions .notice { margin: 0; flex-basis: 100%; text-align: right; }
+
+.like { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+.like svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
+.like.on { border-color: var(--danger); }
+.like.on svg { fill: var(--danger); stroke: var(--danger); animation: like-pop 0.25s ease-out; }
+@keyframes like-pop { 50% { transform: scale(1.3); } }
+@media (prefers-reduced-motion: reduce) { .like.on svg { animation: none; } }
 
 /* ---- sharing ---- */
 

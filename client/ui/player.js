@@ -135,6 +135,7 @@ function Player({ song, user }) {
         ${(song.publishedAt || song.mine) && html`
           <div class="song-actions">
             ${song.mine && !song.publishedAt && html`<p class="notice">Only you can see this page until you publish.</p>`}
+            ${song.publishedAt && html`<${LikeButton} song=${song} user=${user} />`}
             ${song.publishedAt && html`<${ShareMenu} song=${song} />`}
             ${song.mine && html`<${Link} href=${`/songs/${song.id}/publish`} class="button">Edit in studio</${Link}>`}
           </div>`}
@@ -142,6 +143,50 @@ function Player({ song, user }) {
       ${!user && html`<p class="muted cta">Made with Vectorfield. <${Link} href="/sign-in?next=/studio">Sign in</${Link}> to make your own.</p>`}
     </main>
   `;
+}
+
+const HEART = html`
+  <svg viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M8 13.5S2 9.8 2 5.8a3.1 3.1 0 0 1 6-1.3 3.1 3.1 0 0 1 6 1.3c0 4-6 7.7-6 7.7z" />
+  </svg>`;
+
+/**
+ * The heart: like the song or take the like back, with how many have.
+ * It changes as soon as it's clicked and settles on the server's count
+ * when that answers. Signed out, it leads to sign-in and back here.
+ */
+function LikeButton({ song, user }) {
+  const [state, setState] = useState({ liked: song.liked, count: song.likeCount });
+  const pending = useRef(false);
+
+  if (!user) {
+    return html`
+      <${Link} href=${`/sign-in?next=${encodeURIComponent(`/s/${song.id}`)}`} class="button like" title="Sign in to like this song">
+        ${HEART} ${state.count}
+      </${Link}>`;
+  }
+
+  const toggle = async () => {
+    if (pending.current) return;
+    pending.current = true;
+    const before = state;
+    const liked = !state.liked;
+    setState({ liked, count: state.count + (liked ? 1 : -1) });
+    try {
+      const now = liked ? await api.put(`/likes/${song.id}`, {}) : await api.delete(`/likes/${song.id}`);
+      setState({ liked: now.liked, count: now.likeCount });
+    } catch {
+      setState(before);
+    } finally {
+      pending.current = false;
+    }
+  };
+
+  return html`
+    <button class=${`like ${state.liked ? 'on' : ''}`} onClick=${toggle} aria-pressed=${state.liked} aria-label=${`Like (${state.count})`}
+      title=${state.liked ? 'You like this. Click to unlike' : 'Like this song'}>
+      ${HEART} ${state.count}
+    </button>`;
 }
 
 /**

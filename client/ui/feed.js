@@ -3,6 +3,7 @@ import { html, Link, ago, useTitle } from '../lib.js';
 import { api } from '../api.js';
 import { TagChips } from './genre-picker.js';
 import { coverPath } from '../../shared/embed.js';
+import { plural } from './song-view.js';
 
 /** A published song as feeds and profiles list it: its picture, then what it is and who made it. */
 export function SongCard({ song, showOwner = true }) {
@@ -25,6 +26,7 @@ export function SongCard({ song, showOwner = true }) {
             ${song.owner.username}
           </${Link}>`}
         <span class="muted" title=${song.publishedAt && new Date(song.publishedAt).toLocaleString()}>${ago(song.publishedAt)}</span>
+        ${song.likeCount > 0 && html`<span class="muted like-count" title=${plural(song.likeCount, 'like')}>♥ ${song.likeCount}</span>`}
         <${TagChips} tags=${song.tags} />
       </div>
     </li>

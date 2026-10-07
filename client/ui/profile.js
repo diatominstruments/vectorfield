@@ -7,11 +7,11 @@ import { GenrePicker, TagChips } from './genre-picker.js';
 import { SongCard } from './feed.js';
 
 /**
- * A profile: who they are, what they're into, what they've published. The
- * owner edits it in place; a changed username moves the page to its new
- * address.
+ * A profile: who they are, what they're into, and in two tabs, what
+ * they've published and what they've liked. The owner edits it in place; a
+ * changed username moves the page to its new address.
  */
-export function Profile({ username, user, onUserChange }) {
+export function Profile({ username, tab, user, onUserChange }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [editing, setEditing] = useState(false);
@@ -34,7 +34,7 @@ export function Profile({ username, user, onUserChange }) {
     onUserChange(updated);
     setData({ ...data, user: { ...profile, ...updated } });
     setEditing(false);
-    if (updated.username !== username) navigate(`/u/${updated.username}`);
+    if (updated.username !== username) navigate(`/u/${updated.username}${tab === 'likes' ? '/likes' : ''}`);
   };
 
   return html`
@@ -54,14 +54,44 @@ export function Profile({ username, user, onUserChange }) {
             ${mine && html`<button class="edit-profile" onClick=${() => setEditing(true)}>Edit profile</button>`}
           </header>`}
 
-      <h2>${mine ? 'Your published songs' : 'Songs'}</h2>
-      ${data.songs.length
-        ? html`<ul class="song-cards">${data.songs.map((s) => html`<${SongCard} key=${s.id} song=${s} showOwner=${false} />`)}</ul>`
-        : html`<p class="muted">${mine
-            ? html`Nothing published yet. Open a song in the <${Link} href="/studio">studio</${Link}> and use its Publish tab.`
-            : 'Nothing published yet.'}</p>`}
+      <nav class="tabs" aria-label="Profile">
+        <${Link} href=${`/u/${username}`} class=${tab === 'songs' ? 'active' : ''} aria-current=${tab === 'songs' ? 'page' : undefined}>Songs</${Link}>
+        <${Link} href=${`/u/${username}/likes`} class=${tab === 'likes' ? 'active' : ''} aria-current=${tab === 'likes' ? 'page' : undefined}>Liked</${Link}>
+      </nav>
+      ${tab === 'likes'
+        ? html`<${LikedSongs} username=${username} mine=${mine} />`
+        : data.songs.length
+          ? html`<ul class="song-cards">${data.songs.map((s) => html`<${SongCard} key=${s.id} song=${s} showOwner=${false} />`)}</ul>`
+          : html`<p class="muted">${mine
+              ? html`Nothing published yet. Open a song in the <${Link} href="/studio">studio</${Link}> and use its Publish tab.`
+              : 'Nothing published yet.'}</p>`}
     </main>
   `;
+}
+
+/** The songs a user has liked, latest like first, a page at a time. */
+function LikedSongs({ username, mine }) {
+  const [state, setState] = useState({ songs: [], nextBefore: null, loading: true, error: null });
+
+  const load = (before) => {
+    setState((s) => ({ ...s, loading: true, error: null }));
+    const query = before ? `?${new URLSearchParams({ before })}` : '';
+    api.get(`/public/users/${encodeURIComponent(username)}/likes${query}`).then(
+      ({ songs, nextBefore }) => setState((s) => ({ songs: before ? [...s.songs, ...songs] : songs, nextBefore, loading: false, error: null })),
+      (e) => setState((s) => ({ ...s, loading: false, error: e })),
+    );
+  };
+
+  useEffect(() => load(), [username]);
+
+  if (state.error) return html`<p class="error">${state.error.message}</p>`;
+  if (state.loading && !state.songs.length) return html`<p class="muted">Loading…</p>`;
+  if (!state.songs.length) {
+    return html`<p class="muted">${mine ? 'Nothing liked yet. Hit the heart on a song you like and it shows up here.' : 'Nothing liked yet.'}</p>`;
+  }
+  return html`
+    <ul class="song-cards">${state.songs.map((s) => html`<${SongCard} key=${s.id} song=${s} />`)}</ul>
+    ${state.nextBefore && html`<button class="load-more" disabled=${state.loading} onClick=${() => load(state.nextBefore)}>${state.loading ? 'Loading…' : 'More'}</button>`}`;
 }
 
 function ProfileForm({ user, onSaved, onCancel }) {

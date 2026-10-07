@@ -235,3 +235,82 @@ test('the feed pages by publish time', async () => {
   assert.ok(second.songs.length >= 2);
   assert.ok(second.songs.every((s) => new Date(s.publishedAt) < new Date(first.nextBefore)));
 });
+
+test('likes: a heart per user per song, listed on the liker’s profile', async () => {
+  const ada = await signIn('Liker Ada');
+  const bob = await signIn('Liker Bob');
+  const anon = (path, opts = {}) => fetch(`${base}${path}`, opts).then(async (r) => ({ status: r.status, body: await r.json() }));
+  const make = async (title, published = true) => {
+    const { id } = (await ada('/songs', { method: 'POST', body: { title } })).body.song;
+    if (published) await ada(`/songs/${id}/publish`, { method: 'PUT', body: { published: true } });
+    return id;
+  };
+  const first = await make('Liked first');
+  const second = await make('Liked second');
+  const draft = await make('Draft', false);
+
+  // Signing in is needed to like; reading counts isn't.
+  assert.equal((await anon(`/likes/${first}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 401);
+  const unliked = (await anon(`/public/songs/${first}`)).body.song;
+  assert.deepEqual([unliked.likeCount, unliked.liked], [0, false]);
+
+  // Liking twice is still one like; others' likes add up; your own song is fine.
+  assert.deepEqual((await bob(`/likes/${first}`, { method: 'PUT', body: {} })).body, { likeCount: 1, liked: true });
+  assert.deepEqual((await bob(`/likes/${first}`, { method: 'PUT', body: {} })).body, { likeCount: 1, liked: true });
+  assert.deepEqual((await ada(`/likes/${first}`, { method: 'PUT', body: {} })).body, { likeCount: 2, liked: true });
+  await bob(`/likes/${second}`, { method: 'PUT', body: {} });
+
+  const page = (await bob(`/public/songs/${first}`)).body.song;
+  assert.deepEqual([page.likeCount, page.liked], [2, true]);
+
+  // Cards carry the count too, wherever they're listed.
+  const counts = (songs) => Object.fromEntries(songs.filter((s) => s.id === first || s.id === second).map((s) => [s.id, s.likeCount]));
+  assert.deepEqual(counts((await anon('/public/feed')).body.songs), { [first]: 2, [second]: 1 });
+  assert.deepEqual(counts((await anon('/public/users/liker_ada')).body.songs), { [first]: 2, [second]: 1 });
+  assert.deepEqual(counts((await anon('/public/users/liker_bob/likes')).body.songs), { [first]: 2, [second]: 1 });
+
+  // Only published songs, and only real ones.
+  assert.equal((await bob(`/likes/${draft}`, { method: 'PUT', body: {} })).status, 404);
+  assert.equal((await bob('/likes/00000000-0000-0000-0000-000000000000', { method: 'PUT', body: {} })).status, 404);
+  assert.equal((await bob('/likes/nope', { method: 'PUT', body: {} })).status, 404);
+
+  // Anyone can see what Bob liked, latest first, with who made each.
+  const liked = (await anon('/public/users/liker_bob/likes')).body;
+  assert.deepEqual(liked.songs.map((s) => s.id), [second, first]);
+  assert.equal(liked.songs[0].owner.username, 'liker_ada');
+  assert.ok(liked.songs[0].likedAt);
+  assert.equal(liked.nextBefore, null);
+  assert.equal((await anon('/public/users/nobody_here/likes')).status, 404);
+
+  // Unpublishing hides a like from the list; unliking takes it away for good.
+  await ada(`/songs/${second}/publish`, { method: 'PUT', body: { published: false } });
+  assert.deepEqual((await anon('/public/users/liker_bob/likes')).body.songs.map((s) => s.id), [first]);
+  assert.deepEqual((await bob(`/likes/${second}`, { method: 'DELETE' })).body, { likeCount: 0, liked: false });
+  await ada(`/songs/${second}/publish`, { method: 'PUT', body: { published: true } });
+  assert.deepEqual((await anon('/public/users/liker_bob/likes')).body.songs.map((s) => s.id), [first]);
+
+  assert.deepEqual((await bob(`/likes/${first}`, { method: 'DELETE' })).body, { likeCount: 1, liked: false });
+  assert.deepEqual((await anon('/public/users/liker_bob/likes')).body.songs, []);
+
+  // Deleting a song takes its likes with it.
+  await ada(`/songs/${first}`, { method: 'DELETE' });
+  assert.deepEqual((await anon('/public/users/liker_ada/likes')).body.songs, []);
+});
+
+test('liked songs page by when they were liked', async () => {
+  const maker = await signIn('Like Maker');
+  const fan = await signIn('Big Fan');
+  const ids = [];
+  for (let i = 0; i < 22; i++) {
+    const { id } = (await maker('/songs', { method: 'POST', body: { title: `Song ${i}` } })).body.song;
+    await maker(`/songs/${id}/publish`, { method: 'PUT', body: { published: true } });
+    await fan(`/likes/${id}`, { method: 'PUT', body: {} });
+    ids.push(id);
+  }
+  const first = (await fan('/public/users/big_fan/likes')).body;
+  assert.equal(first.songs.length, 20);
+  assert.equal(first.songs[0].id, ids.at(-1));
+  const second = (await fan(`/public/users/big_fan/likes?before=${encodeURIComponent(first.nextBefore)}`)).body;
+  assert.deepEqual(second.songs.map((s) => s.id), [ids[1], ids[0]]);
+  assert.equal(second.nextBefore, null);
+});
