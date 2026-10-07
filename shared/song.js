@@ -141,6 +141,30 @@ export function automatableParams(M) {
   return Object.entries(M.params).filter(([, spec]) => spec.type === 'number' && spec.automatable !== false);
 }
 
+/**
+ * An instrument's keys, { note: label }, as these params set it up. A
+ * sampler's sounds are the bank's it plays, which its static `keys` (the
+ * default bank's) doesn't know. Null for instruments that play pitches.
+ */
+export function instrumentKeys(M, params) {
+  const bank = M?.banks?.[params?.bank];
+  return bank ? bank.keys : M?.keys ?? null;
+}
+
+/**
+ * Whether a group of an instrument's params applies with these keys. A
+ * sampler has a group for every sound in any of its banks; one shaping a
+ * sound the bank it's playing doesn't have does nothing. Groups not tied
+ * to a sound always apply.
+ */
+export const groupApplies = (group, keys) => !group.notes || !keys || group.notes.some((note) => note in keys);
+
+/** The params of an instrument that do nothing as these params set it up: those for sounds its bank lacks. */
+export function inapplicableParams(M, params) {
+  const keys = instrumentKeys(M, params);
+  return new Set((M.groups ?? []).filter((g) => !groupApplies(g, keys)).flatMap((g) => g.params));
+}
+
 /** The module entry a lane sweeps on its track: the instrument, or one effect; undefined once that effect is gone. */
 export const laneTarget = (track, lane) =>
   (lane.effect ? track.effects.find((e) => e.uid === lane.effect) : track.instrument);
@@ -386,7 +410,8 @@ function normalizeSequencers(p, trackIds) {
 
 // Songs saved before patterns had automation have none. A lane goes if its
 // track or effect has gone, or its param isn't one that module can sweep
-// (the instrument was changed); a second lane on the same param goes too.
+// (the instrument was changed) or one for a sound its sampler bank doesn't
+// have (the bank was changed); a second lane on the same param goes too.
 // Points are kept in step order, one per step, inside the pattern.
 function normalizeAutomation(lanes, length, trackOf) {
   const seen = new Set();
@@ -403,7 +428,9 @@ function normalizeAutomation(lanes, length, trackOf) {
     .map((lane) => {
       const effect = typeof lane.effect === 'string' ? lane.effect : undefined;
       const entry = laneTarget(trackOf.get(lane.track), { effect });
-      const spec = entry && automatableParams(registry.get(entry.id)).find(([n]) => n === lane.param)?.[1];
+      const M = entry && registry.get(entry.id);
+      const spec = M && !inapplicableParams(M, entry.params).has(lane.param)
+        && automatableParams(M).find(([n]) => n === lane.param)?.[1];
       const key = `${lane.track}:${effect ?? ''}:${lane.param}`;
       if (!spec || seen.has(key)) return null;
       seen.add(key);

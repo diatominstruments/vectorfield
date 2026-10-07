@@ -1,7 +1,7 @@
 import { useRef, useState } from 'preact/hooks';
 import { registry } from 'gloaming-instruments';
 import { html, hue, useEngineEvent } from '../lib.js';
-import { LIMITS, automatableParams, automationValue, laneTarget, newId } from '../../shared/song.js';
+import { LIMITS, automatableParams, automationValue, inapplicableParams, laneTarget, newId } from '../../shared/song.js';
 import { moduleInfo, instrumentKeys, groupLabel, formatValue, toSlider, toValue } from './params.js';
 
 const LINE_REACH = 10;   // px from the line (or a point) that still counts as on it
@@ -16,13 +16,15 @@ const targetKey = (effect, name) => `${effect ?? ''}:${name}`;
 /**
  * The params of one module a lane can sweep, labelled to read on their own
  * ('Filter cutoff', not 'Cutoff'; 'Reverb mix', not 'Mix'), primary params
- * first.
+ * first. A sampler's params for sounds its bank doesn't have aren't offered.
  */
 function moduleParams(M, params, effect, prefix) {
   const info = moduleInfo(M);
   const keys = instrumentKeys(M, params);
   const groupOf = new Map(info.groups.flatMap((g) => g.params.map((name) => [name, groupLabel(g, keys)])));
+  const inapplicable = inapplicableParams(M, params);
   return automatableParams(M)
+    .filter(([name]) => !inapplicable.has(name))
     .map(([name]) => {
       const spec = info.params[name];
       const group = groupOf.get(name);

@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   defaultSong, normalizeSong, blockTimes, stylesInEffect, visualsInEffect, newBlock, newVisual, copyBlock, removeBlock,
-  nextBlock, playOrder, sections, automationValue, newEffect, pruneAutomation, LIMITS, SongError,
+  nextBlock, playOrder, sections, automationValue, newEffect, newTrack, pruneAutomation, inapplicableParams, LIMITS, SongError,
 } from '../shared/song.js';
+import { registry } from 'gloaming-instruments';
 import { sampleSong } from './fixtures.js';
 
 test('a new song is a blank canvas', () => {
@@ -315,6 +316,25 @@ test('automation lanes can sweep a track\'s effects, named by uid', () => {
   keys.effects.shift();
   pruneAutomation(song);
   assert.deepEqual(p.automation, []);
+});
+
+test('a sampler\'s lanes on sounds its bank doesn\'t have go', () => {
+  const song = sampleSong();
+  const kit = newTrack('sampler', 'Kit');
+  song.tracks.push(kit);
+  const p = song.patterns[0];
+  const lane = (id, param) => ({ id, track: kit.id, param, points: [] });
+  p.automation = [lane('a1', 'kickTune'), lane('a2', 'rimTune'), lane('a3', 'tambourineTune'), lane('a4', 'tune')];
+
+  // The 909 has a rim but no tambourine; kick and the whole-kit tune are in every bank.
+  assert.deepEqual(normalizeSong(song).patterns[0].automation.map((l) => l.param), ['kickTune', 'rimTune', 'tune']);
+  assert.deepEqual([...inapplicableParams(registry.get('sampler'), kit.instrument.params)].filter((n) => n.endsWith('Tune')).sort(),
+    ['pedalHatTune', 'tambourineTune']);
+
+  // Dirt is the other way round.
+  kit.instrument.params.bank = 'DIRT';
+  pruneAutomation(song);
+  assert.deepEqual(p.automation.map((l) => l.param), ['kickTune', 'tambourineTune', 'tune']);
 });
 
 test('effects saved before they had uids get them, unique in their chain', () => {

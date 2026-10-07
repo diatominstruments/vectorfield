@@ -1,5 +1,6 @@
 import { describe, matches, sanitizeParams } from 'gloaming-instruments';
 import { html } from '../lib.js';
+import { instrumentKeys, groupApplies } from '../../shared/song.js';
 
 /**
  * A module's display metadata (labels, units, groups, presets…), as the
@@ -11,16 +12,15 @@ export function moduleInfo(M) {
   return infoCache.get(M);
 }
 
-/**
- * An instrument's keys, { note: label }, as these params set it up. A
- * sampler's sounds are the bank's it plays, which its static `keys` (the
- * default bank's) doesn't know. Null for instruments that play pitches.
- */
-export function instrumentKeys(M, params) {
-  if (!M) return null;
-  const info = moduleInfo(M);
-  const bank = info.banks?.[params?.bank];
-  return bank ? bank.keys : info.keys ?? null;
+// What an instrument's keys are, and which of its groups of params apply,
+// depend on the sampler bank it plays; song.js decides, so automation is
+// pruned by the same rule the panels follow.
+export { instrumentKeys };
+
+/** The groups of a module's params that apply as these params set it up. */
+export function moduleGroups(M, params) {
+  const keys = instrumentKeys(M, params);
+  return moduleInfo(M).groups.filter((group) => groupApplies(group, keys));
 }
 
 /**
@@ -90,10 +90,11 @@ function currentPreset(M, presets, params) {
 export function ParamPanel({ module: M, params, onChange, compact = false }) {
   const info = moduleInfo(M);
   const keys = instrumentKeys(M, params);
+  const groups = moduleGroups(M, params);
 
   if (compact) {
     // Out of their groups, labels need the group to make sense: 'Kick tune', not 'Tune'.
-    const primary = info.groups.flatMap((group) => group.params
+    const primary = groups.flatMap((group) => group.params
       .filter((name) => info.params[name].primary)
       .map((name) => {
         const spec = info.params[name];
@@ -112,7 +113,7 @@ export function ParamPanel({ module: M, params, onChange, compact = false }) {
   const presetNames = Object.keys(presets);
   const preset = currentPreset(M, presets, params);
   // One group named like its module ('Filter' in a Filter) needs no heading.
-  const headings = info.groups.length > 1;
+  const headings = groups.length > 1;
 
   return html`
     <div class="params">
@@ -124,7 +125,7 @@ export function ParamPanel({ module: M, params, onChange, compact = false }) {
             ${presetNames.map((name) => html`<option value=${name}>${name}</option>`)}
           </select>
         </label>`}
-      ${info.groups.map((group) => html`
+      ${groups.map((group) => html`
         <section class="group" key=${group.id}>
           ${headings && html`<h4>${groupLabel(group, keys)}</h4>`}
           <${RoleGraph} group=${group} params=${params} />

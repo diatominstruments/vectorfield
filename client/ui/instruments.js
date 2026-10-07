@@ -1,7 +1,10 @@
 import { useState } from 'preact/hooks';
 import { registry, matches } from 'gloaming-instruments';
 import { html, hue } from '../lib.js';
-import { LIMITS, GENERATIVE_SEQUENCERS, instrumentTypes, effectTypes, moduleLabel, moduleEntry, newEffect, newTrack, pruneAutomation } from '../../shared/song.js';
+import {
+  LIMITS, GENERATIVE_SEQUENCERS, instrumentTypes, effectTypes, moduleLabel, moduleEntry, newEffect, newTrack, pruneAutomation,
+  inapplicableParams,
+} from '../../shared/song.js';
 import { ParamPanel, moduleInfo, instrumentKeys } from './params.js';
 import { ModulePicker } from './module-picker.js';
 
@@ -54,7 +57,18 @@ function TrackCard({ track, index, store, engine }) {
     });
   };
 
-  const setInstrumentParams = (values) => edit((t) => { Object.assign(t.instrument.params, values); });
+  // A new sampler bank (picked directly, or by a preset) can leave lanes
+  // automating sounds the bank doesn't have; they go, once confirmed.
+  const setInstrumentParams = (values) => {
+    const next = { ...track.instrument.params, ...values };
+    const inapplicable = inapplicableParams(M, next);
+    const stranded = store.doc.patterns.some((p) => p.automation.some((l) => l.track === track.id && !l.effect && inapplicable.has(l.param)));
+    if (stranded && !confirm('Changing sample banks will delete incompatible automations')) return;
+    edit((t, d) => {
+      Object.assign(t.instrument.params, values);
+      if (stranded) pruneAutomation(d);
+    });
+  };
   // Automation of an effect that's removed goes with it.
   const editEffects = (fn) => edit((t, d) => { fn(t.effects); pruneAutomation(d); });
   const patternsAutomating = (uid) => store.doc.patterns
