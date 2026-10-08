@@ -5,11 +5,13 @@ import { TAG_LIMITS } from '../../shared/genres.js';
 import { USER_LIMITS, usernameProblem } from '../../shared/users.js';
 import { GenrePicker, TagChips } from './genre-picker.js';
 import { SongCard } from './feed.js';
+import { plural } from './song-view.js';
 
 /**
- * A profile: who they are, what they're into, and in two tabs, what
- * they've published and what they've liked. The owner edits it in place; a
- * changed username moves the page to its new address.
+ * A profile: who they are, what they're into, who follows them, and in two
+ * tabs, what they've published and what they've liked. Anyone else can
+ * follow them, to be told when they publish. The owner edits it in place;
+ * a changed username moves the page to its new address.
  */
 export function Profile({ username, tab, user, onUserChange }) {
   const [data, setData] = useState(null);
@@ -50,8 +52,14 @@ export function Profile({ username, tab, user, onUserChange }) {
               ${profile.interests.length
                 ? html`<p class="interests"><span class="muted">Into</span> <${TagChips} tags=${profile.interests} /></p>`
                 : mine && html`<p class="muted">Pick the genres you're into and your feed's For you tab fills with them.</p>`}
+              <p class="follow-stats">
+                <span><b>${data.followerCount}</b> ${data.followerCount === 1 ? 'follower' : 'followers'}</span>
+                <span><b>${data.followingCount}</b> following</span>
+              </p>
             </div>
-            ${mine && html`<button class="edit-profile" onClick=${() => setEditing(true)}>Edit profile</button>`}
+            ${mine
+              ? html`<button class="edit-profile" onClick=${() => setEditing(true)}>Edit profile</button>`
+              : html`<${FollowButton} profile=${profile} user=${user} following=${data.following} onChange=${(f) => setData({ ...data, ...f })} />`}
           </header>`}
 
       <nav class="tabs" aria-label="Profile">
@@ -92,6 +100,34 @@ function LikedSongs({ username, mine }) {
   return html`
     <ul class="song-cards">${state.songs.map((s) => html`<${SongCard} key=${s.id} song=${s} />`)}</ul>
     ${state.nextBefore && html`<button class="load-more" disabled=${state.loading} onClick=${() => load(state.nextBefore)}>${state.loading ? 'Loading…' : 'More'}</button>`}`;
+}
+
+/**
+ * Follow or unfollow, with the button showing which it is now. Following
+ * someone gets you told when they publish. Signed out, it leads to sign-in
+ * and back here.
+ */
+function FollowButton({ profile, user, following, onChange }) {
+  const [busy, setBusy] = useState(false);
+
+  if (!user) {
+    return html`<${Link} href=${`/sign-in?next=${encodeURIComponent(`/u/${profile.username}`)}`} class="button follow" title="Sign in to follow">Follow</${Link}>`;
+  }
+
+  const toggle = async () => {
+    setBusy(true);
+    try {
+      onChange(following ? await api.delete(`/follows/${profile.username}`) : await api.put(`/follows/${profile.username}`, {}));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return html`
+    <button class=${`follow ${following ? 'on' : ''}`} disabled=${busy} onClick=${toggle} aria-pressed=${following}
+      title=${following ? 'You follow them. Click to unfollow' : 'Follow to hear about their new songs'}>
+      ${following ? 'Following' : 'Follow'}
+    </button>`;
 }
 
 function ProfileForm({ user, onSaved, onCancel }) {

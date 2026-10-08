@@ -995,3 +995,48 @@ header.site .user .settings-link.active { background: var(--panel-2); }
 
 .choose-username { max-width: 520px; }
 .choose-username .field-label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); margin-top: 6px; }
+
+/* ---- following ---- */
+
+.follow-stats { display: flex; gap: 14px; margin: 10px 0 0; font-size: 13px; color: var(--muted); }
+.follow-stats b { color: var(--fg); font-weight: 600; }
+.follow.on { border-color: var(--line-strong); color: var(--muted); }
+.follow.on:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); }
+
+/* ---- notifications: the bell, and the page ---- */
+
+header.site .bell {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: var(--radius); color: var(--muted);
+}
+header.site .bell:hover, header.site .bell.active { color: var(--fg); }
+header.site .bell.active { background: var(--panel-2); }
+header.site .bell svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+header.site .bell-count {
+  position: absolute; top: 0; right: -2px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+  background: var(--accent); color: var(--on-accent); font-size: 10px; line-height: 16px; font-weight: 700; text-align: center;
+}
+
+.notifications { max-width: 720px; margin: 24px auto 40px; padding: 0 16px; }
+.notifications h1 { font-size: 22px; margin: 0 0 12px; }
+.notification-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.notification {
+  display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 2px 12px; align-items: start;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel);
+}
+.notification.unread { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: color-mix(in srgb, var(--accent) 4%, var(--panel)); }
+.notification .who { position: relative; width: 32px; height: 32px; }
+.notification .who img, .notification .who .avatar-blank { width: 32px; height: 32px; border-radius: 50%; font-size: 14px; }
+.notification .who .avatar-blank.glyph { color: var(--accent); text-transform: none; }
+.notification .who .kind {
+  position: absolute; right: -4px; bottom: -4px; width: 16px; height: 16px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 9px; line-height: 1;
+  background: var(--accent); color: var(--on-accent); border: 2px solid var(--panel);
+}
+.notification p { margin: 0; padding-top: 6px; }
+.notification p a { color: var(--fg); font-weight: 600; }
+.notification p a:hover { text-decoration: underline; }
+.notification .when { font-size: 12px; white-space: nowrap; }
+.notification .song-cards { grid-column: 2; margin-top: 8px; }
+.notification .song-card { background: var(--panel-2); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

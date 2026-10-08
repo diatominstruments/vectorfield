@@ -314,3 +314,117 @@ test('liked songs page by when they were liked', async () => {
   assert.deepEqual(second.songs.map((s) => s.id), [ids[1], ids[0]]);
   assert.equal(second.nextBefore, null);
 });
+
+test('following: counted on the profile, never yourself', async () => {
+  const ada = await signIn('Follow Ada');
+  const bob = await signIn('Follow Bob');
+  const anon = (path, opts = {}) => fetch(`${base}${path}`, opts).then(async (r) => ({ status: r.status, body: await r.json() }));
+  const counts = ({ body }) => [body.followerCount, body.followingCount, body.following];
+
+  assert.deepEqual(counts(await bob('/public/users/follow_ada')), [0, 0, false]);
+
+  // Following twice is still one follow; the answer is where things stand.
+  assert.deepEqual((await bob('/follows/follow_ada', { method: 'PUT', body: {} })).body, { followerCount: 1, following: true });
+  assert.deepEqual((await bob('/follows/follow_ada', { method: 'PUT', body: {} })).body, { followerCount: 1, following: true });
+  assert.deepEqual(counts(await bob('/public/users/follow_ada')), [1, 0, true]);
+  assert.deepEqual(counts(await ada('/public/users/follow_ada')), [1, 0, false]);
+  assert.deepEqual(counts(await anon('/public/users/follow_bob')), [0, 1, false]);
+
+  assert.equal((await ada('/follows/follow_ada', { method: 'PUT', body: {} })).status, 400);
+  assert.equal((await ada('/follows/nobody_here', { method: 'PUT', body: {} })).status, 404);
+  assert.equal((await anon('/follows/follow_ada', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 401);
+
+  assert.deepEqual((await bob('/follows/follow_ada', { method: 'DELETE' })).body, { followerCount: 0, following: false });
+  assert.deepEqual(counts(await bob('/public/users/follow_ada')), [0, 0, false]);
+});
+
+test('notifications: a welcome, likes, new songs from people you follow, new followers', async () => {
+  const { messageText } = await import('../shared/notifications.js');
+  const ada = await signIn('Notify Ada');
+  const bob = await signIn('Notify Bob');
+  const kinds = async (api) => (await api('/notifications')).body.notifications.map((n) => n.kind);
+
+  // A new account starts with a welcome, unread; signing in again isn't a new account.
+  let list = (await ada('/notifications')).body;
+  assert.deepEqual(list.notifications.map((n) => n.kind), ['welcome']);
+  assert.equal(list.unread, 1);
+  assert.deepEqual([list.notifications[0].actor, list.notifications[0].song, list.notifications[0].readAt], [null, null, null]);
+  assert.match(messageText(list.notifications[0]), /^Welcome to Vectorfield/);
+  await signIn('Notify Ada');
+  assert.deepEqual(await kinds(ada), ['welcome']);
+
+  // Bob follows Ada: she's told who.
+  await bob('/follows/notify_ada', { method: 'PUT', body: {} });
+  list = (await ada('/notifications')).body;
+  assert.deepEqual(list.notifications.map((n) => n.kind), ['new_follower', 'welcome']);
+  assert.equal(list.notifications[0].actor.username, 'notify_bob');
+  assert.equal(messageText(list.notifications[0]), 'notify_bob started following you');
+
+  // Ada publishes: Bob's told, with the song as a feed card. Retagging isn't news.
+  const { id } = (await ada('/songs', { method: 'POST', body: { title: 'Tune' } })).body.song;
+  await ada(`/songs/${id}/publish`, { method: 'PUT', body: { published: true, tags: ['techno'] } });
+  await ada(`/songs/${id}/publish`, { method: 'PUT', body: { tags: ['techno', 'dub'] } });
+  list = (await bob('/notifications')).body;
+  assert.deepEqual(list.notifications.map((n) => n.kind), ['new_song', 'welcome']);
+  const fresh = list.notifications[0];
+  assert.deepEqual([fresh.actor.username, fresh.song.id, fresh.song.title, fresh.song.owner.username, fresh.song.tags], ['notify_ada', id, 'Tune', 'notify_ada', ['techno', 'dub']]);
+  assert.equal(messageText(fresh), 'notify_ada published a new song, Tune');
+
+  // Bob likes it: Ada's told once, however many times he clicks. Her own like isn't news.
+  await bob(`/likes/${id}`, { method: 'PUT', body: {} });
+  await bob(`/likes/${id}`, { method: 'PUT', body: {} });
+  await ada(`/likes/${id}`, { method: 'PUT', body: {} });
+  list = (await ada('/notifications')).body;
+  assert.deepEqual(list.notifications.map((n) => n.kind), ['song_liked', 'new_follower', 'welcome']);
+  assert.deepEqual([list.notifications[0].actor.username, list.notifications[0].song.id, list.notifications[0].song.likeCount], ['notify_bob', id, 2]);
+  assert.equal(messageText(list.notifications[0]), 'notify_bob liked your song Tune');
+  assert.equal(list.unread, 3);
+  assert.equal((await ada('/notifications/unread')).body.unread, 3);
+
+  // Reading marks everything; the list still says which were new.
+  assert.deepEqual((await ada('/notifications/read', { method: 'PUT', body: {} })).body, { unread: 0 });
+  assert.equal((await ada('/notifications/unread')).body.unread, 0);
+  list = (await ada('/notifications')).body;
+  assert.ok(list.notifications.every((n) => n.readAt));
+  assert.equal(list.unread, 0);
+
+  // Taking things back takes the notification back too.
+  await bob(`/likes/${id}`, { method: 'DELETE' });
+  assert.deepEqual(await kinds(ada), ['new_follower', 'welcome']);
+  await bob('/follows/notify_ada', { method: 'DELETE' });
+  assert.deepEqual(await kinds(ada), ['welcome']);
+  await ada(`/songs/${id}/publish`, { method: 'PUT', body: { published: false } });
+  assert.deepEqual(await kinds(bob), ['welcome']);
+
+  // Publishing again tells the followers of now; deleting the song takes everything about it.
+  await bob('/follows/notify_ada', { method: 'PUT', body: {} });
+  await ada(`/songs/${id}/publish`, { method: 'PUT', body: { published: true } });
+  await bob(`/likes/${id}`, { method: 'PUT', body: {} });
+  assert.deepEqual(await kinds(bob), ['new_song', 'welcome']);
+  assert.deepEqual(await kinds(ada), ['song_liked', 'new_follower', 'welcome']);
+  await ada(`/songs/${id}`, { method: 'DELETE' });
+  assert.deepEqual(await kinds(bob), ['welcome']);
+  assert.deepEqual(await kinds(ada), ['new_follower', 'welcome']);
+
+  // Yours alone.
+  assert.equal((await fetch(`${base}/notifications`)).status, 401);
+});
+
+test('notifications page by id, newest first', async () => {
+  const maker = await signIn('Busy Maker');
+  const fan = await signIn('Keen Fan');
+  await fan('/follows/busy_maker', { method: 'PUT', body: {} });
+  for (let i = 0; i < 22; i++) {
+    const { id } = (await maker('/songs', { method: 'POST', body: { title: `Song ${i}` } })).body.song;
+    await maker(`/songs/${id}/publish`, { method: 'PUT', body: { published: true } });
+  }
+  const first = (await fan('/notifications')).body;
+  assert.equal(first.notifications.length, 20);
+  assert.equal(first.notifications[0].song.title, 'Song 21');
+  assert.ok(first.nextBefore);
+  const second = (await fan(`/notifications?before=${first.nextBefore}`)).body;
+  assert.deepEqual(second.notifications.map((n) => n.kind), ['new_song', 'new_song', 'welcome']);
+  assert.equal(second.nextBefore, null);
+  const ids = [...first.notifications, ...second.notifications].map((n) => Number(n.id));
+  assert.ok(ids.every((id, i) => i === 0 || id < ids[i - 1]));
+});

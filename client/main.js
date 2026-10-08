@@ -11,6 +11,7 @@ import { SongPage } from './ui/player.js';
 import { ChooseUsername } from './ui/choose-username.js';
 import { Settings } from './ui/settings.js';
 import { EmbedPage } from './ui/embed.js';
+import { Notifications, NotificationBell, useUnread } from './ui/notifications.js';
 import { applyTheme, storedTheme } from './theme.js';
 
 const EDITOR_VIEWS = 'instruments|patterns|song|visuals|publish';
@@ -23,6 +24,7 @@ const EDITOR_VIEWS = 'instruments|patterns|song|visuals|publish';
  *   /u/:username/likes the songs they've liked (everyone)
  *   /studio            your songs (signed in)
  *   /settings          theme and account (signed in)
+ *   /notifications     what's happened to your songs, and new ones from people you follow (signed in)
  *   /songs/:id/:view   the editor (signed in)
  *   /sign-in           sign in, then back to ?next=
  *   /embed/:id         a published song's player alone, for iframes on other sites
@@ -33,6 +35,7 @@ function route(path) {
   if (path === '/sign-in') return { name: 'sign-in' };
   if (path === '/studio') return { name: 'studio', auth: true };
   if (path === '/settings') return { name: 'settings', auth: true };
+  if (path === '/notifications') return { name: 'notifications', auth: true };
   if ((m = /^\/s\/([0-9a-f-]+)$/.exec(path))) return { name: 'song', id: m[1] };
   if ((m = /^\/u\/([a-z0-9_]+)(?:\/(likes))?$/i.exec(path))) return { name: 'profile', username: m[1].toLowerCase(), tab: m[2] ?? 'songs' };
   if ((m = new RegExp(`^/songs/([0-9a-f-]+)(?:/(${EDITOR_VIEWS}))?$`).exec(path))) return { name: 'editor', id: m[1], view: m[2] ?? 'instruments', auth: true };
@@ -49,6 +52,7 @@ const accountTheme = (user) => (user?.username ? user.theme : null);
 function App() {
   const path = usePath();
   const [session, setSession] = useState(null);   // { user, config } once loaded
+  const [unread, setUnread] = useUnread(session?.user);
 
   useEffect(() => {
     Promise.all([api.get('/auth/me'), api.get('/config')])
@@ -94,6 +98,8 @@ function App() {
     page = html`<${Feed} user=${user} />`;
   } else if (r.name === 'studio') {
     page = html`<${SongList} />`;
+  } else if (r.name === 'notifications') {
+    page = html`<${Notifications} user=${user} onSeen=${() => setUnread(0)} />`;
   } else if (r.name === 'settings') {
     page = html`<${Settings} user=${user} onUserChange=${setUser} onSignOut=${signOut} />`;
   } else if (r.name === 'editor') {
@@ -120,6 +126,7 @@ function App() {
               ${user.avatarUrl && html`<img src=${user.avatarUrl} alt="" referrerpolicy="no-referrer" />`}
               <span>${user.username}</span>
             </${Link}>
+            <${NotificationBell} unread=${unread} active=${r.name === 'notifications'} />
             <${Link} href="/settings" class=${`settings-link ${r.name === 'settings' ? 'active' : ''}`} title="Settings">Settings</${Link}>
             <button class="ghost" onClick=${signOut}>Sign out</button>`
           : r.name !== 'sign-in' && html`<${Link} href=${signInHref} class="button primary">Sign in</${Link}>`}

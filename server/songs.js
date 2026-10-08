@@ -3,6 +3,7 @@ import { defaultSong, normalizeSong, SongError, LIMITS } from '../shared/song.js
 import { TAG_LIMITS, normalizeTags } from '../shared/genres.js';
 import { requireProfile } from './auth.js';
 import { parseCover } from './cover.js';
+import { notifyFollowers, unnotify } from './notifications.js';
 
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const DESCRIPTION_LENGTH = 500;
@@ -94,13 +95,16 @@ export function songsRouter(db) {
   // autosave, and it doesn't touch the document or its revision. The same
   // call updates tags, description and picture (`cover`, a frame of the
   // visuals as a JPEG data URL) whether or not the song is public;
-  // `published` flips it, and the original publish date is kept.
+  // `published` flips it, and the original publish date is kept. Going
+  // public tells the owner's followers; going private takes that back.
   router.put('/:id/publish', async (req, res) => {
     const body = req.body ?? {};
     const cover = 'cover' in body ? parseCover(body.cover) : null;
     if ('cover' in body && !cover) return res.status(400).json({ error: 'The picture must be a JPEG under 64 KB' });
 
     const song = await db.transaction(async (tx) => {
+      const was = await tx.query('select published_at from songs where id = $1 and owner_id = $2', [req.params.id, req.user.id]);
+      if (!was.rows[0]) return null;
       const { rows } = await tx.query(
         `update songs set
            tags = coalesce($3::jsonb, tags),
@@ -119,6 +123,10 @@ export function songsRouter(db) {
         ],
       );
       if (!rows[0]) return null;
+      const wasPublic = Boolean(was.rows[0].published_at);
+      const isPublic = Boolean(rows[0].published_at);
+      if (isPublic && !wasPublic) await notifyFollowers(tx, { owner: req.user.id, kind: 'new_song', song: req.params.id });
+      if (wasPublic && !isPublic) await unnotify(tx, { kind: 'new_song', song: req.params.id });
       const covers = cover
         ? await tx.query(
           `insert into song_covers (song_id, image) values ($1, $2)

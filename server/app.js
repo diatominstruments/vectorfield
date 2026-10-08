@@ -6,6 +6,8 @@ import { authRouter, sessionMiddleware } from './auth.js';
 import { songsRouter } from './songs.js';
 import { publicRouter } from './public.js';
 import { likesRouter } from './likes.js';
+import { followsRouter } from './follows.js';
+import { notificationsRouter } from './notifications.js';
 import { shareRouter } from './share.js';
 
 const PUBLIC = new URL('../public/', import.meta.url).pathname;
@@ -59,6 +61,8 @@ export function createApp(db) {
   api.use('/auth', authRouter(db));
   api.use('/songs', songsRouter(db));
   api.use('/likes', likesRouter(db));
+  api.use('/follows', followsRouter(db));
+  api.use('/notifications', notificationsRouter(db));
   api.use('/public', publicRouter(db));
   api.use((_req, res) => res.status(404).json({ error: 'Not found' }));
 

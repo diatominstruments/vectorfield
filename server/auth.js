@@ -6,6 +6,7 @@ import { verifyAppleIdToken } from './apple.js';
 import { TAG_LIMITS, normalizeTags } from '../shared/genres.js';
 import { usernameProblem, suggestUsername, cleanBio } from '../shared/users.js';
 import { DEFAULT_THEME, isTheme } from '../shared/themes.js';
+import { notify } from './notifications.js';
 
 const COOKIE = 'sid';
 const hash = (token) => createHash('sha256').update(token).digest('hex');
@@ -73,10 +74,14 @@ export function authRouter(db) {
     const { rows } = await db.query(
       `insert into users (${col}, email, avatar_url, username) values ($1, $2, $3, $4)
        on conflict (${col}) do update set email = excluded.email, avatar_url = excluded.avatar_url
-       returning *`,
+       returning *, (xmax = 0) as is_new`,
       [sub, email ?? null, picture ?? null, username],
     );
-    return rows[0];
+    // xmax is 0 only on a row this statement inserted, not one it updated:
+    // a first sign-in, which gets a welcome waiting for when the username's chosen.
+    const { is_new: isNew, ...user } = rows[0];
+    if (isNew) await notify(db, { to: user.id, kind: 'welcome' });
+    return user;
   }
 
   router.post('/google', async (req, res) => {

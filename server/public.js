@@ -19,6 +19,23 @@ export const SONG_WITH_OWNER = `
   from songs s join users u on u.id = s.owner_id
   left join song_covers c on c.song_id = s.id`;
 
+/** The user with this username, or null: the name is the profile's address. */
+export async function findUser(db, username) {
+  username = String(username).toLowerCase();
+  if (!USERNAME.test(username)) return null;
+  return (await db.query('select * from users where username = $1', [username])).rows[0] ?? null;
+}
+
+/** How many follow `userId`, and whether `viewerId` (if any) is one of them. */
+export async function followersOf(db, userId, viewerId = null) {
+  const { rows } = await db.query(
+    `select count(*)::int as count, coalesce(bool_or(follower_id = $2), false) as following
+     from user_follows where followed_id = $1`,
+    [userId, viewerId],
+  );
+  return { followerCount: rows[0].count, following: rows[0].following };
+}
+
 /** `before`, if it's a time: where the next page of a list starts. */
 const cursor = (q) => (typeof q === 'string' && !Number.isNaN(Date.parse(q)) ? q : null);
 
@@ -63,28 +80,23 @@ export function publicRouter(db) {
     });
   });
 
-  const findUser = async (username) => {
-    username = username.toLowerCase();
-    if (!USERNAME.test(username)) return null;
-    return (await db.query('select * from users where username = $1', [username])).rows[0] ?? null;
-  };
-
   // A profile and its published songs.
   router.get('/users/:username', async (req, res) => {
-    const user = await findUser(req.params.username);
+    const user = await findUser(db, req.params.username);
     if (!user) return res.status(404).json({ error: 'No such user' });
     const { rows } = await db.query(
       `${SONG_WITH_OWNER} where s.owner_id = $1 and s.published_at is not null order by s.published_at desc`,
       [user.id],
     );
-    res.json({ user: publicUser(user), songs: rows.map(card) });
+    const following = (await db.query('select count(*)::int as n from user_follows where follower_id = $1', [user.id])).rows[0].n;
+    res.json({ user: publicUser(user), songs: rows.map(card), ...(await followersOf(db, user.id, req.user?.id)), followingCount: following });
   });
 
   // The songs a user has liked, most recently liked first, paged like the
   // feed but by when they were liked. A song since unpublished drops out
   // (and comes back if it's published again).
   router.get('/users/:username/likes', async (req, res) => {
-    const user = await findUser(req.params.username);
+    const user = await findUser(db, req.params.username);
     if (!user) return res.status(404).json({ error: 'No such user' });
     const params = [user.id];
     const before = cursor(req.query.before);

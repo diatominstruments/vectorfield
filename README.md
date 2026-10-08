@@ -78,14 +78,15 @@ npm start        # production server (needs DATABASE_URL and GOOGLE_CLIENT_ID)
 
 ```
 client/            Preact + htm, bundled by esbuild
-  main.js          routes: / feed, /s/:id song page, /u/:username profile, /studio, /songs/:id editor, /settings, /embed/:id
+  main.js          routes: / feed, /s/:id song page, /u/:username profile, /studio, /songs/:id editor, /settings, /notifications, /embed/:id
   theme.js         applies a theme (data-theme on <html>) and remembers it on the device
   engine.js        audio: song doc → live instrument chains + lookahead sequencer
   bounce-sim.js, tubule-sim.js  the generative sequencers — bouncing balls, microtubules — stepped by the engine
   store.js         the song being edited, with debounced autosave
   ui/visual-canvas.js  gloaming-kit on a canvas: analyzes the engine's output, follows its clock
   ui/visuals.js    the editor's visuals tab; ui/player.js the read-only song page
-  ui/feed.js       New / For you; ui/profile.js profiles; ui/publish.js the Publish tab, picture picker included
+  ui/feed.js       New / For you; ui/profile.js profiles, Follow button included; ui/publish.js the Publish tab, picture picker included
+  ui/notifications.js  the bell in the header and the notifications page
   ui/share.js      the song page's share menu, and turning a frame of the visuals into a picture
   ui/embed.js      the embed player: just the stage, for an iframe on another site
   ui/genre-picker.js  choosing genres, for a song's tags or a profile's interests
@@ -95,6 +96,7 @@ shared/bounce.js, shared/tubules.js  each generative sequencer's settings and th
 shared/visuals.js  validation for the visual side: looks and the kit's signal-spec language
 shared/genres.js   the electronic music taxonomy (families → genres) used for tags
 shared/users.js    username and profile rules
+shared/notifications.js  every kind of notification: its icon and wording, in one place
 shared/themes.js   the colour themes; their tokens are in public/styles.css
 shared/embed.js    embed and picture sizes, and the iframe code, for the share menu and oEmbed alike
 server/            Express 5
@@ -102,6 +104,8 @@ server/            Express 5
   apple.js         verifies Apple ID tokens against Apple's published keys
   songs.js         the owner's side: CRUD with revision checks, publishing
   public.js        what anyone can read: the feed, profiles, published songs
+  likes.js, follows.js  liking a song, following a user — each tells the other person
+  notifications.js the notifications table: writing them, listing them, marking them read
   share.js         link previews: song tags in the page head, covers, oEmbed, the embed page
   cover.js         song pictures: checking picked ones, drawing a default
   migrations/      plain SQL, applied in order
@@ -127,6 +131,20 @@ _New_ is everything, _For you_ is what's tagged with genres in the user's
 interests, where liking a family means liking every genre in it — and at
 `/s/:id`, where the song plays live from its document with its visuals.
 Unpublishing takes it out of both.
+
+**Following and notifications.** Anyone signed in can follow a user from
+their profile, which shows how many follow them and how many they follow.
+A bell in the header counts unread notifications (checked once a minute
+while the tab is visible) and opens `/notifications`, which marks them
+read. A user is told when someone likes their song, when someone they
+follow publishes one, and when someone follows them, plus a welcome on
+their first sign-in; the song a notification is about is shown under it
+as a feed card. Taking the action back (unlike, unfollow, unpublish)
+takes the notification back, and one thing is one notification however
+many times it's repeated. The wording of every kind is in
+`shared/notifications.js` and put together on display, so an edit there
+changes old notifications too; the rows (`server/notifications.js`) only
+say what happened, to whom, and about what.
 
 **Sharing.** A published song's page has a Share menu: its link, buttons
 for Facebook, Reddit and X, and an iframe of `/embed/:id`, a compact player
