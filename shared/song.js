@@ -5,6 +5,9 @@ import { normalizeBounce, defaultBounce } from './bounce.js';
 import { normalizeTubules, defaultTubules } from './tubules.js';
 import { normalizeAnts, defaultAnts } from './ants.js';
 import { normalizeFireflies, defaultFireflies } from './fireflies.js';
+import { normalizeBees, defaultBees } from './bees.js';
+import { normalizeFrogs, defaultFrogs } from './frogs.js';
+import { normalizeSandpile, defaultSandpile } from './sandpile.js';
 
 export { SongError };
 
@@ -19,11 +22,15 @@ export { SongError };
  *     mix: { effects: [{ uid, id, version, params }, ...] },   // on the whole song
  *     patterns: [{ id, name, length,
  *                  notes: { [trackId]: [{ step, note, velocity, length }] },
- *                  sequencers: { [trackId]: 'bounce' | 'tubules' | 'ants' | 'fireflies' },   // absent = steps
+ *                  sequencers: { [trackId]: 'bounce' | 'tubules' | 'ants' | 'fireflies'
+ *                                           | 'bees' | 'frogs' | 'sandpile' },   // absent = steps
  *                  bounce: { [trackId]: { ... } },        // see bounce.js
  *                  tubules: { [trackId]: { ... } },       // see tubules.js
  *                  ants: { [trackId]: { ... } },          // see ants.js
  *                  fireflies: { [trackId]: { ... } },     // see fireflies.js
+ *                  bees: { [trackId]: { ... } },          // see bees.js
+ *                  frogs: { [trackId]: { ... } },         // see frogs.js
+ *                  sandpile: { [trackId]: { ... } },      // see sandpile.js
  *                  automation: [{ id, track, effect?, param,
  *                                 points: [{ step, value }] }] }],
  *     arrangement: [{ id, pattern, visuals, style,     // blocks in play order
@@ -110,14 +117,15 @@ export function newTrack(instrumentId, name) {
   };
 }
 
-export const SEQUENCERS = ['steps', 'bounce', 'tubules', 'ants', 'fireflies'];
+export const SEQUENCERS = ['steps', 'bounce', 'tubules', 'ants', 'fireflies', 'bees', 'frogs', 'sandpile'];
 
 /** The sequencers besides the step grid, each keeping its settings in a pattern field of its own name. */
 export const GENERATIVE_SEQUENCERS = SEQUENCERS.filter((k) => k !== 'steps');
 
 /**
  * Each track in a pattern picks its own sequencer: the step grid, bouncing
- * balls, microtubules, an ant colony or fireflies. A track keeps its step
+ * balls, microtubules, an ant colony, fireflies, bees, a frog chorus or a
+ * sandpile. A track keeps its step
  * notes and the settings of every sequencer it has tried, whichever is
  * chosen, so switching back and forth never loses work.
  */
@@ -375,6 +383,9 @@ const GENERATIVE = {
   tubules: { normalize: normalizeTubules, fresh: defaultTubules },
   ants: { normalize: normalizeAnts, fresh: defaultAnts },
   fireflies: { normalize: normalizeFireflies, fresh: defaultFireflies },
+  bees: { normalize: normalizeBees, fresh: defaultBees },
+  frogs: { normalize: normalizeFrogs, fresh: defaultFrogs },
+  sandpile: { normalize: normalizeSandpile, fresh: defaultSandpile },
 };
 
 // Returns { sequencers, ...settings }: the track → sequencer choices, and

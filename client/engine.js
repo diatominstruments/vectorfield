@@ -4,6 +4,9 @@ import { BounceSim } from './bounce-sim.js';
 import { TubuleSim } from './tubule-sim.js';
 import { AntSim } from './ant-sim.js';
 import { FireflySim } from './firefly-sim.js';
+import { BeeSim } from './bee-sim.js';
+import { FrogSim } from './frog-sim.js';
+import { SandpileSim } from './sandpile-sim.js';
 
 // The server serves the library's sample banks here (see server/app.js).
 Sampler.bankRoot = '/kits/';
@@ -14,6 +17,8 @@ const STEPS_PER_BEAT = 4;
 const TUBULE_VELOCITY = 0.7;
 const FLASH_VELOCITY = 0.75;    // a firefly flashing in its own time
 const PULLED_VELOCITY = 0.6;    // one set off by another's flash, a touch softer under it
+const CALL_VELOCITY = 0.7;      // a frog's call
+const FIRST_CALL_VELOCITY = 0.9;   // the first of a bout, an accent
 const TRACE_SECONDS = 2;        // how much of a simulation's history the editors can draw from
 const AUTOMATION_RESOLUTION = 4;   // automation values set per step
 
@@ -214,6 +219,9 @@ export class Engine {
         else if (kind === 'tubules') stepped.add(this.#tubuleStep(pattern, track, muted, t, stepLength));
         else if (kind === 'ants') this.#antStep(pattern, track, muted, t, stepLength);
         else if (kind === 'fireflies') this.#fireflyStep(pattern, track, muted, t, stepLength);
+        else if (kind === 'bees') this.#beeStep(pattern, track, muted, t, stepLength);
+        else if (kind === 'frogs') this.#frogStep(pattern, track, muted, t, stepLength);
+        else if (kind === 'sandpile') this.#sandpileStep(pattern, track, muted, t, stepLength);
         else if (!muted) this.#gridStep(pattern, track, t, stepLength);
       }
       // Tubules hold their notes, so any left sounding from another pattern
@@ -389,6 +397,93 @@ export class Engine {
     }
   }
 
+  // Bees: fly the track's bees through this step, playing each landing on
+  // a flower, harder on a fuller one. The patch lives for the whole playback, so
+  // bees and nectar carry on from where they were the next time the
+  // pattern comes round.
+  #beeStep(pattern, track, muted, t, stepLength) {
+    const config = pattern.bees[track.id];
+    const key = simKey(pattern.id, track.id, 'bees');
+    let entry = this.sims.get(key);
+    if (!entry) {
+      entry = { sim: new BeeSim(config), trace: [], hits: [] };
+      this.sims.set(key, entry);
+    }
+    entry.sim.sync(config);
+
+    const beat = stepLength * STEPS_PER_BEAT;
+    const snap = (time) => ({ time, bees: entry.sim.positions(), nectar: Object.fromEntries(entry.sim.nectar) });
+    if (!entry.trace.length) entry.trace.push(snap(t));
+    const landings = entry.sim.advance(1 / STEPS_PER_BEAT, (at) => entry.trace.push(snap(t + at * beat)));
+    this.#trimTrace(entry);
+
+    // A muted track's bees keep foraging; they just don't sound.
+    const live = muted ? null : this.live.get(track.id);
+    const notes = new Map(config.plants.map((p) => [p.id, p.note]));
+    for (const landing of landings) {
+      const time = this.#hitTime(config, t, stepLength, landing.at);
+      entry.hits.push({ time, flower: landing.flower });
+      if (live) this.#queueOn(time, live.instrument, notes.get(landing.flower), 0.45 + 0.55 * landing.strength, config.gate * stepLength);
+    }
+  }
+
+  // Frog chorus: run the track's frogs through this step, playing each
+  // call, the first of a bout accented. They live for the whole playback,
+  // so whatever turns they've settled into carry on — unless the settings
+  // scatter them again at the start of every pass.
+  #frogStep(pattern, track, muted, t, stepLength) {
+    const config = pattern.frogs[track.id];
+    const key = simKey(pattern.id, track.id, 'frogs');
+    let entry = this.sims.get(key);
+    if (!entry) {
+      entry = { sim: new FrogSim(config), hits: [] };
+      this.sims.set(key, entry);
+    }
+    entry.sim.sync(config);
+    if (config.restart && this.cursor.step === 0) entry.sim.scatter();
+
+    const calls = entry.sim.advance(1 / STEPS_PER_BEAT);
+    this.#trimTrace(entry);
+
+    // A muted track's frogs keep calling; they just don't sound.
+    const live = muted ? null : this.live.get(track.id);
+    const notes = new Map(config.frogs.map((f) => [f.id, f.note]));
+    for (const call of calls) {
+      const time = this.#hitTime(config, t, stepLength, call.at);
+      entry.hits.push({ time, id: call.id });
+      if (live) this.#queueOn(time, live.instrument, notes.get(call.id), call.first && config.bout ? FIRST_CALL_VELOCITY : CALL_VELOCITY, config.gate * stepLength);
+    }
+  }
+
+  // Sandpile: drop this step's grains on the track's pile, playing each
+  // ring of cells that topples, louder the more of them go together. The
+  // pile lives for the whole playback, so it stays near toppling from one
+  // pass to the next.
+  #sandpileStep(pattern, track, muted, t, stepLength) {
+    const config = pattern.sandpile[track.id];
+    const key = simKey(pattern.id, track.id, 'sandpile');
+    let entry = this.sims.get(key);
+    if (!entry) {
+      entry = { sim: new SandpileSim(config), trace: [], hits: [] };
+      this.sims.set(key, entry);
+    }
+    entry.sim.sync(config);
+
+    const beat = stepLength * STEPS_PER_BEAT;
+    const snap = (time) => ({ time, cells: [...entry.sim.cells] });
+    if (!entry.trace.length || entry.trace.at(-1).cells.length !== entry.sim.cells.length) entry.trace.push(snap(t));
+    const waves = entry.sim.advance(1 / STEPS_PER_BEAT, (at) => entry.trace.push(snap(t + at * beat)));
+    this.#trimTrace(entry);
+
+    // A muted track's pile keeps toppling; it just doesn't sound.
+    const live = muted ? null : this.live.get(track.id);
+    for (const wave of waves) {
+      const time = this.#hitTime(config, t, stepLength, wave.at);
+      entry.hits.push({ time, ring: wave.ring, cells: wave.cells });
+      if (live) this.#queueOn(time, live.instrument, config.notes[wave.ring], 0.55 + 0.45 * Math.min(1, (wave.count - 1) / 3), config.gate * stepLength);
+    }
+  }
+
   // When a hit `at` beats into the step starting at `t` sounds: right then,
   // or snapped forward to the next line of the settings' grid.
   #hitTime(config, t, stepLength, at) {
@@ -532,9 +627,10 @@ export class Engine {
   }
 
   /**
-   * What a track's balls, tubules, ants or fireflies in a pattern have been
-   * doing, for drawing: { trace: [{ time, balls | tubules | ants }], hits:
-   * [{ time, … }] } (fireflies have hits only).
+   * What a track's balls, tubules, ants, fireflies, bees, frogs or sandpile
+   * in a pattern have been doing, for drawing: { trace: [{ time, balls |
+   * tubules | ants | bees | cells }], hits: [{ time, … }] } (fireflies and
+   * frogs have hits only).
    * Null unless playing.
    */
   sequencerTrace(patternId, trackId, kind) {

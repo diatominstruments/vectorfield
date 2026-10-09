@@ -6,11 +6,18 @@ import { defaultBounce } from '../../shared/bounce.js';
 import { defaultTubules } from '../../shared/tubules.js';
 import { defaultAnts } from '../../shared/ants.js';
 import { defaultFireflies } from '../../shared/fireflies.js';
+import { defaultBees } from '../../shared/bees.js';
+import { defaultFrogs } from '../../shared/frogs.js';
+import { defaultSandpile } from '../../shared/sandpile.js';
+import { ARP_COUNTS, ORDERS, SHAPES, arpeggio } from '../../shared/arpeggio.js';
 import { plural } from './song-view.js';
 import { BounceEditor } from './bounce-editor.js';
 import { TubuleEditor } from './tubule-editor.js';
 import { AntEditor } from './ant-editor.js';
 import { FireflyEditor } from './firefly-editor.js';
+import { BeeEditor } from './bee-editor.js';
+import { FrogEditor } from './frog-editor.js';
+import { SandpileEditor } from './sandpile-editor.js';
 import { AutomationLanes } from './automation.js';
 import { instrumentKeys } from './params.js';
 
@@ -23,6 +30,9 @@ const GENERATIVE = {
   tubules: { label: 'Microtubules', fresh: defaultTubules, Editor: TubuleEditor, summary: (c) => plural(c.rings.length * c.sections, 'zone') },
   ants: { label: 'Ant colony', fresh: defaultAnts, Editor: AntEditor, summary: (c) => plural(c.ants, 'ant') },
   fireflies: { label: 'Fireflies', fresh: defaultFireflies, Editor: FireflyEditor, summary: (c) => `${c.flies.length} ${c.flies.length === 1 ? 'firefly' : 'fireflies'}` },
+  bees: { label: 'Bees', fresh: defaultBees, Editor: BeeEditor, summary: (c) => plural(c.bees, 'bee') },
+  frogs: { label: 'Frog chorus', fresh: defaultFrogs, Editor: FrogEditor, summary: (c) => plural(c.frogs.length, 'frog') },
+  sandpile: { label: 'Sandpile', fresh: defaultSandpile, Editor: SandpileEditor, summary: (c) => `${c.size}×${c.size}` },
 };
 
 /** The keys of a track's instrument, as its params set it up; see instrumentKeys. */
@@ -37,6 +47,8 @@ export function PatternsView({ store, engine, pattern, onSelect }) {
   const { doc } = store;
   const [trackId, setTrackId] = useState(doc.tracks[0]?.id);
   const [newLength, setNewLength] = useState(1);
+  // What a click on the roll lays down: one note, or a whole arpeggio from it.
+  const [arp, setArp] = useState({ shape: 'single', order: 'up', count: 4 });
   const track = doc.tracks.find((t) => t.id === trackId) ?? doc.tracks[0];
   const pitched = track && !trackKeys(track);
   const kind = track && pattern ? sequencerOf(pattern, track.id) : 'steps';
@@ -159,9 +171,24 @@ export function PatternsView({ store, engine, pattern, onSelect }) {
                   <button key=${steps} role="radio" aria-checked=${newLength === steps}
                     class=${newLength === steps ? 'active' : ''} onClick=${() => setNewLength(steps)}
                     title=${`${plural(steps, 'step')}`}>${label}</button>`)}
+              </div>
+              <div class="note-length arpeggio" role="group" aria-label="Arpeggio">
+                <span class="muted">Arpeggio</span>
+                <select aria-label="Chord shape" value=${arp.shape} onChange=${(e) => setArp({ ...arp, shape: e.target.value })}
+                  title="A click lays down a run of this chord from the clicked note, one note per new-note length">
+                  <option value="single">Off</option>
+                  ${Object.entries(SHAPES).map(([k, s]) => html`<option value=${k}>${s.label}</option>`)}
+                </select>
+                ${arp.shape !== 'single' && html`
+                  <select aria-label="Order" value=${arp.order} onChange=${(e) => setArp({ ...arp, order: e.target.value })}>
+                    ${Object.entries(ORDERS).map(([k, label]) => html`<option value=${k}>${label}</option>`)}
+                  </select>
+                  <select aria-label="Notes in the run" value=${arp.count} onChange=${(e) => setArp({ ...arp, count: Number(e.target.value) })}>
+                    ${ARP_COUNTS.map((n) => html`<option value=${n}>${n} notes</option>`)}
+                  </select>`}
               </div>`}
             <${StepGrid} key=${`${pattern.id}:${track.id}`} store=${store} engine=${engine} pattern=${pattern} track=${track}
-              trackIndex=${doc.tracks.indexOf(track)} newLength=${newLength} />`}
+              trackIndex=${doc.tracks.indexOf(track)} newLength=${newLength} arp=${arp} />`}
             <${AutomationLanes} store=${store} engine=${engine} pattern=${pattern} track=${track} />`}
       </div>
     </section>
@@ -223,13 +250,15 @@ const NOTE_LENGTHS = [[1, '1/16'], [2, '1/8'], [4, '1/4'], [8, '1/2'], [16, '1 b
  * get one row per sound, and every hit is a one-shot. Pitched instruments
  * get a two-octave piano roll that can be shifted up and down, where:
  *
- *   click an empty cell      add a note of the chosen length
+ *   click an empty cell      add a note of the chosen length — or, with an
+ *                            arpeggio chosen, the whole run from that note,
+ *                            one note of that length after another
  *   drag from an empty cell  add a note and stretch it as you drag
  *   drag a note             resize it (its start stays put)
  *   click a note            remove it
  *   shift-click             accent
  */
-function StepGrid({ store, engine, pattern, track, trackIndex, newLength }) {
+function StepGrid({ store, engine, pattern, track, trackIndex, newLength, arp }) {
   const keys = trackKeys(track);
   const [baseOctave, setBaseOctave] = useState(keys ? 0 : defaultOctave(pattern.notes[track.id]));
   const gridRef = useRef();
@@ -268,8 +297,25 @@ function StepGrid({ store, engine, pattern, track, trackIndex, newLength }) {
   };
 
   // A note may grow rightward up to the next note on its row, or the pattern's end.
-  const roomAfter = (note, step) =>
-    notes.filter((n) => n.note === note && n.step > step).reduce((m, n) => Math.min(m, n.step), pattern.length) - step;
+  const roomAfter = (note, step, list = notes) =>
+    list.filter((n) => n.note === note && n.step > step).reduce((m, n) => Math.min(m, n.step), pattern.length) - step;
+
+  // Lay an arpeggio's notes down from `step`, one new-note length apart,
+  // skipping any that would land on a note already there or past the end.
+  const placeArpeggio = (root, step, velocity) => {
+    const run = arpeggio(root, arp.shape, arp.order, arp.count);
+    editNotes((list) => {
+      const out = [...list];
+      run.forEach((note, i) => {
+        const at = step + i * newLength;
+        if (at >= pattern.length || out.length >= LIMITS.notesPerTrack) return;
+        if (out.some((n) => n.note === note && n.step <= at && at < n.step + n.length)) return;
+        out.push({ step: at, note, velocity, length: Math.min(newLength, roomAfter(note, at, out)) });
+      });
+      return out;
+    });
+    engine.audition(track.id, root, velocity);
+  };
 
   const onPointerDown = (e, note) => {
     if (e.button !== 0) return;
@@ -283,6 +329,7 @@ function StepGrid({ store, engine, pattern, track, trackIndex, newLength }) {
     } else {
       if (notes.length >= LIMITS.notesPerTrack) return;
       const velocity = e.shiftKey ? 1 : 0.75;
+      if (!keys && arp?.shape !== 'single') return placeArpeggio(note, step, velocity);
       const length = keys ? 1 : Math.min(newLength, roomAfter(note, step));
       editNotes((list) => [...list, { step, note, velocity, length }]);
       engine.audition(track.id, note, velocity);
@@ -358,7 +405,9 @@ function StepGrid({ store, engine, pattern, track, trackIndex, newLength }) {
       </div>
       <p class="hint muted">${keys
         ? 'Click to add or remove a hit; drum hits are one-shots, so they have no length. Shift-click for an accent.'
-        : 'Click to add a note, or drag to stretch it as you place it. Drag a note to resize it; click it to remove. Shift-click for an accent. On a mono synth, overlapping notes slide.'}</p>
+        : arp?.shape !== 'single'
+          ? `Click to lay down a ${SHAPES[arp.shape].label.toLowerCase()} run of ${arp.count} notes from that note, ${ORDERS[arp.order].toLowerCase()}, one note per new-note length. Drag a note to resize it; click it to remove. Shift-click for accents.`
+          : 'Click to add a note, or drag to stretch it as you place it. Drag a note to resize it; click it to remove. Shift-click for an accent. On a mono synth, overlapping notes slide.'}</p>
     </div>
   `;
 }
