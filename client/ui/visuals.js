@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { catalog, describe } from 'gloaming-kit';
 import { html, hue, useEngineEvent } from '../lib.js';
-import { blockTimes, newVisual, stylesInEffect, visualsInEffect } from '../../shared/song.js';
+import { blockTimes, newId, newVisual, stylesInEffect, visualsInEffect } from '../../shared/song.js';
 import { VISUAL_LIMITS } from '../../shared/visuals.js';
 import { VisualPanel, LookPanel, vizLabel } from './visual-config.js';
 import { VisualCanvas, songTimeline } from './visual-canvas.js';
@@ -32,12 +32,19 @@ function Preview({ store, engine, previewTime, browse }) {
   return html`<${VisualCanvas} engine=${engine} timeline=${songTimeline(doc)} look=${store.doc.look} holdTime=${previewTime} />`;
 }
 
+// What Copy took: the visuals and look one block shows, kept for the
+// session so they can be pasted onto other blocks, even in another song.
+let clipboard = null;
+
 export function VisualsView({ store, engine }) {
   const { doc } = store;
   const [selection, setSelection] = useState({ kind: 'look' });
   // The open visual browser: the block it edits, the visualizations picked
   // so far (in the order they'll be added), and those it will take off.
   const [browse, setBrowse] = useState(null);
+  const [copied, setCopied] = useState(clipboard);
+  // The last paste, undoable while nothing else has changed since.
+  const [lastPaste, setLastPaste] = useState(null);
   const previewTime = useRef(0);
   const configRef = useRef();
   const position = useEngineEvent(engine, 'position', engine.position);
@@ -84,6 +91,51 @@ export function VisualsView({ store, engine }) {
     if (added.length) select({ kind: 'visual', blockId: browse.blockId, visualId: added.at(-1).id }, blockIndex);
   };
 
+  // A block's visuals as they show: its own, or those it continues from an
+  // earlier block. The look is the whole look in effect there.
+  const copy = (i) => {
+    const block = doc.arrangement[i];
+    clipboard = {
+      songId: store.id, song: store.title, blockId: block.id,
+      from: `Block ${i + 1} · ${patterns.get(block.pattern).p.name}`,
+      visuals: structuredClone(inEffect[i].visuals),
+      look: { ...doc.look, ...styles[i] },
+    };
+    setCopied(clipboard);
+    setLastPaste(null);
+  };
+
+  // Replaces the block's visuals, and sets its look to only what differs
+  // from the look it starts from, so it shows the copied look exactly.
+  const paste = (i) => {
+    const block = doc.arrangement[i];
+    const before = lookBefore(i);
+    const style = Object.fromEntries(Object.entries(copied.look).filter(([key, v]) => v !== before[key]));
+    const undo = { blockId: block.id, visuals: structuredClone(block.visuals), style: block.style };
+    editBlock(block.id, (b) => {
+      b.visuals = copied.visuals.map((v) => ({ ...structuredClone(v), id: newId() }));
+      b.style = Object.keys(style).length ? style : null;
+    });
+    setLastPaste({ ...undo, at: store.editCount, label: `Block ${i + 1} · ${patterns.get(block.pattern).p.name}` });
+    previewTime.current = times[i].start + 0.001;
+  };
+
+  const undoPaste = () => {
+    const { blockId, visuals, style } = lastPaste;
+    setLastPaste(null);
+    editBlock(blockId, (b) => { b.visuals = visuals; b.style = style; });
+  };
+
+  const stopPasting = () => {
+    clipboard = null;
+    setCopied(null);
+    setLastPaste(null);
+  };
+
+  // While pasting, each row's Paste (or Replace) takes the place of its + Visual.
+  const isCopySource = (block) => copied?.songId === store.id && copied.blockId === block.id;
+  const canUndo = lastPaste?.at === store.editCount;
+
   // Resolve the selection against the current doc; anything deleted falls back to the song look.
   const selIndex = selection.blockId ? doc.arrangement.findIndex((b) => b.id === selection.blockId) : -1;
   const selBlock = doc.arrangement[selIndex];
@@ -112,6 +164,27 @@ export function VisualsView({ store, engine }) {
       onChange=${(key, value) => store.edit((d) => { d.look[key] = value; })} />`;
   }
 
+  // ⌘C copies the selected block, ⌘V pastes onto it, and Esc stops pasting.
+  const onKey = useRef();
+  onKey.current = (e) => {
+    if (e.target.closest?.('input, select, textarea') || e.altKey || e.shiftKey) return;
+    const key = e.key.toLowerCase();
+    if ((e.metaKey || e.ctrlKey) && key === 'c' && selBlock && inEffect[selIndex].visuals.length && !getSelection().toString()) {
+      e.preventDefault();
+      copy(selIndex);
+    } else if ((e.metaKey || e.ctrlKey) && key === 'v' && selBlock && copied && !isCopySource(selBlock)) {
+      e.preventDefault();
+      paste(selIndex);
+    } else if (e.key === 'Escape' && copied && !browse) {
+      stopPasting();
+    }
+  };
+  useEffect(() => {
+    const listener = (e) => onKey.current(e);
+    addEventListener('keydown', listener);
+    return () => removeEventListener('keydown', listener);
+  }, []);
+
   // A deleted block takes its open browser with it.
   const browseIndex = browse ? doc.arrangement.findIndex((b) => b.id === browse.blockId) : -1;
   if (browse && browseIndex < 0) setBrowse(null);
@@ -124,12 +197,21 @@ export function VisualsView({ store, engine }) {
         ${doc.arrangement.length === 0
           ? html`<p class="muted empty">Chain some patterns in the Song view first; visuals attach to its blocks.</p>`
           : html`
+            ${copied && html`
+              <div class="viz-clipboard" role="status">
+                <span>
+                  Copied the visuals and look of <strong>${copied.from}</strong>${copied.songId !== store.id && ` in “${copied.song}”`}.
+                  ${canUndo ? ` Pasted onto ${lastPaste.label}.` : ' Paste them onto other blocks.'}
+                </span>
+                ${canUndo && html`<button class="ghost" onClick=${undoPaste}>Undo</button>`}
+                <button onClick=${stopPasting} title="Stop pasting (Esc)">Done</button>
+              </div>`}
             <ol class="viz-timeline">
               ${doc.arrangement.map((block, i) => {
                 const { p, i: pi } = patterns.get(block.pattern);
                 const blockSelected = selection.kind === 'block' && selection.blockId === block.id;
                 return html`
-                  <li key=${block.id} class=${i === playingIndex ? 'now' : ''} style=${`--hue: ${hue(pi)}; --length: ${p.length}`}>
+                  <li key=${block.id} class=${`${i === playingIndex ? 'now' : ''} ${isCopySource(block) ? 'copied-from' : ''}`} style=${`--hue: ${hue(pi)}; --length: ${p.length}`}>
                     <span class="bar" title="Start time">${fmtTime(times[i].start)}</span>
                     <button class=${`block ${blockSelected ? 'selected' : ''}`} onClick=${() => select({ kind: 'block', blockId: block.id }, i)}
                       title="Set this block's look">
@@ -151,8 +233,14 @@ export function VisualsView({ store, engine }) {
                         </button>`)}
                       ${browseIndex === i && browse.picks.map((viz, k) => html`
                         <span key=${`pick${k}`} class="viz-block pending" title="Not added yet: Save or Cancel below">+ ${vizLabel(viz)}</span>`)}
-                      <button class=${`add-viz ${browseIndex === i ? 'open' : ''}`} aria-expanded=${browseIndex === i}
-                        onClick=${() => openBrowser(i)}>${block.visuals.length < VISUAL_LIMITS.perBlock ? '+ Visual' : 'Visuals…'}</button>
+                      ${(!copied || browseIndex === i) && html`
+                        <button class=${`add-viz ${browseIndex === i ? 'open' : ''}`} aria-expanded=${browseIndex === i}
+                          onClick=${() => openBrowser(i)}>${block.visuals.length < VISUAL_LIMITS.perBlock ? '+ Visual' : 'Visuals…'}</button>`}
+                      ${copied && browseIndex !== i && (isCopySource(block)
+                        ? html`<span class="copied-tag">Copied</span>`
+                        : html`<button class="paste-viz" onClick=${() => paste(i)}
+                            title=${`${block.visuals.length ? 'Replace this block\'s visuals and look with' : 'Give this block'} the visuals and look of ${copied.from}`}>
+                            ${block.visuals.length ? 'Replace' : 'Paste'}</button>`)}
                       <button class="ghost play-here" onClick=${() => engine.play({ index: i })} title="Play from here">▶</button>
                     </div>
                     ${browseIndex === i && html`
@@ -166,7 +254,14 @@ export function VisualsView({ store, engine }) {
             </ol>`}
       </div>
       <aside class="visuals-config" ref=${configRef}>
-        ${selection.kind !== 'look' && html`<button class="ghost back" onClick=${() => setSelection({ kind: 'look' })}>← Song look</button>`}
+        ${selection.kind !== 'look' && html`
+          <div class="config-actions">
+            <button class="ghost back" onClick=${() => setSelection({ kind: 'look' })}>← Song look</button>
+            ${selBlock && html`
+              <button class="ghost" disabled=${!inEffect[selIndex].visuals.length} onClick=${() => copy(selIndex)}
+                title=${inEffect[selIndex].visuals.length ? `Copy the visuals and look of block ${selIndex + 1}, to paste onto other blocks (⌘C)` : 'No visuals on or before this block yet'}>
+                Copy visuals</button>`}
+          </div>`}
         ${panel}
       </aside>
     </section>

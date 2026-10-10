@@ -595,8 +595,20 @@ input[type=range].centered::-moz-range-progress { background: transparent; }
 }
 .play-here { margin-left: auto; }
 
+/* while something's copied: what, and Done; each other block gets Paste or Replace */
+.viz-clipboard {
+  position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px;
+  padding: 6px 8px 6px 14px; font-size: 13px; background: var(--panel); border: 1px solid var(--accent); border-radius: var(--radius);
+}
+.viz-clipboard > span { flex: 1 1 240px; }
+.visuals.browsing .viz-clipboard { position: static; }
+.viz-timeline li.copied-from .block { border-style: dashed; border-color: var(--accent); }
+.paste-viz { background: transparent; border-color: var(--accent); color: var(--accent); }
+.copied-tag { font-size: 12px; color: var(--accent); padding: 0 6px; }
+
 .visuals-config { position: sticky; top: 12px; display: grid; gap: 8px; }
-.visuals-config .back { justify-self: start; padding-left: 0; }
+.visuals-config .config-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.visuals-config .back { padding-left: 0; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
 .panel header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .panel h3 { margin: 0; font-size: 15px; flex: 1; }
