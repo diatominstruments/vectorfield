@@ -594,6 +594,7 @@ input[type=range].centered::-moz-range-progress { background: transparent; }
   background: var(--accent); color: var(--on-accent);
 }
 .play-here { margin-left: auto; }
+.play-here.on { color: var(--accent); }
 
 /* while something's copied: what, and Done; each other block gets Paste or Replace */
 .viz-clipboard {

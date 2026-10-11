@@ -48,7 +48,9 @@ export function VisualsView({ store, engine }) {
   const previewTime = useRef(0);
   const configRef = useRef();
   const position = useEngineEvent(engine, 'position', engine.position);
+  const playing = useEngineEvent(engine, 'state', engine.playing);
   const playingIndex = position && engine.cursor?.mode === 'song' ? position.index : -1;
+  const loopingId = playing ? engine.cursor?.loopBlock : null;
 
   const patterns = new Map(doc.patterns.map((p, i) => [p.id, { p, i }]));
   const times = blockTimes(doc);
@@ -65,6 +67,14 @@ export function VisualsView({ store, engine }) {
     }
     // Hold the stopped preview a moment into the block, past any fade-in.
     if (blockIndex !== undefined) previewTime.current = times[blockIndex].start + 0.001;
+  };
+
+  // Loop one block, so its visuals can be tuned as they move; again stops it.
+  const toggleLoop = (blockIndex) => {
+    if (loopingId === doc.arrangement[blockIndex].id) return engine.stop();
+    engine.play({ index: blockIndex, loop: true });
+    // When stopped, hold the preview on the block that was looping.
+    previewTime.current = times[blockIndex].start + 0.001;
   };
 
   const editBlock = (blockId, fn) => store.edit((d) => fn(d.arrangement.find((b) => b.id === blockId), d));
@@ -241,13 +251,14 @@ export function VisualsView({ store, engine }) {
                         : html`<button class="paste-viz" onClick=${() => paste(i)}
                             title=${`${block.visuals.length ? 'Replace this block\'s visuals and look with' : 'Give this block'} the visuals and look of ${copied.from}`}>
                             ${block.visuals.length ? 'Replace' : 'Paste'}</button>`)}
-                      <button class="ghost play-here" onClick=${() => engine.play({ index: i })} title="Play from here">▶</button>
+                      <button class=${`ghost play-here ${loopingId === block.id ? 'on' : ''}`} onClick=${() => toggleLoop(i)}
+                        title=${loopingId === block.id ? 'Stop looping this block' : 'Loop this block'}>${loopingId === block.id ? '■' : '▶'}</button>
                     </div>
                     ${browseIndex === i && html`
                       <${VisualBrowser} browse=${browse} added=${block.visuals.map((v) => v.viz)}
                         limit=${VISUAL_LIMITS.perBlock}
                         onChange=${(change) => setBrowse({ ...browse, ...change })}
-                        onPlay=${() => engine.play({ index: i })}
+                        looping=${loopingId === block.id} onPlay=${() => toggleLoop(i)}
                         onSave=${saveBrowser} onCancel=${() => setBrowse(null)} />`}
                   </li>`;
               })}
@@ -275,7 +286,7 @@ export function VisualsView({ store, engine }) {
  * either. The preview above shows the result straight away, and nothing is
  * saved until Save.
  */
-function VisualBrowser({ browse, added, limit, onChange, onPlay, onSave, onCancel }) {
+function VisualBrowser({ browse, added, limit, looping, onChange, onPlay, onSave, onCancel }) {
   const ref = useRef();
   const { picks, removed } = browse;
   const kept = added.filter((viz) => !removed.includes(viz)).length;
@@ -319,7 +330,8 @@ function VisualBrowser({ browse, added, limit, onChange, onPlay, onSave, onCance
             ${!has3D && ` · ${NO_3D_HINT}`}
           </span>
         </div>
-        <button class="ghost" onClick=${onPlay} title="Play from this block, to see the visuals move">▶ Play</button>
+        <button class="ghost" onClick=${onPlay} title=${looping ? 'Stop looping this block' : 'Loop this block, to see the visuals move'}>
+          ${looping ? '■ Stop' : '▶ Play'}</button>
         ${actions}
       </header>
       ${catalog().map((group) => html`

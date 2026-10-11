@@ -26,7 +26,8 @@ const AUTOMATION_RESOLUTION = 4;   // automation values set per step
  * Engine — turns a song document into sound. Owns the AudioContext, one
  * live instrument → effects → gain chain per track, the main mix's effects
  * after them (master → mix effects → limiter), and a lookahead
- * scheduler that plays either one pattern on loop or the arrangement, and
+ * scheduler that plays one pattern on loop, one block of the arrangement on
+ * loop, or the arrangement, and
  * sweeps params along the playing pattern's automation lanes.
  *
  * The song document stays the source of truth: after any edit, sync(song)
@@ -152,7 +153,10 @@ export class Engine {
 
   // ---- playback --------------------------------------------------------------
 
-  /** Play one pattern on loop ({ patternId }) or the arrangement ({ index }). */
+  /**
+   * Play one pattern on loop ({ patternId }), the arrangement ({ index }),
+   * or just one of its blocks on loop ({ index, loop: true }).
+   */
   async play(from) {
     this.ensureContext();
     this.stop();
@@ -161,6 +165,8 @@ export class Engine {
     this.cursor = from.patternId
       ? { mode: 'pattern', patternId: from.patternId, index: 0, pass: 0, step: 0 }
       : { mode: 'song', patternId: null, index: from.index ?? 0, pass: 0, step: 0 };
+    // A looped block is followed by id, so it keeps looping as other blocks move.
+    this.cursor.loopBlock = from.loop ? this.song.arrangement[this.cursor.index]?.id ?? null : null;
     this.startIndex = this.cursor.index;
     this.nextTime = this.ctx.currentTime + 0.05;
     this.queue = [];         // note events waiting for their time; see #enqueue
@@ -241,7 +247,8 @@ export class Engine {
   }
 
   // The end of a pattern: in the arrangement, its block's next repeat, or
-  // the block after it (an index past the end when the song is over).
+  // the block after it (an index past the end when the song is over) — or
+  // the looped block again, from its first repeat.
   #advance() {
     const cursor = this.cursor;
     cursor.step = 0;
@@ -249,6 +256,11 @@ export class Engine {
     const block = this.song.arrangement[cursor.index];
     if (block && ++cursor.pass < block.repeat) return;
     cursor.pass = 0;
+    if (cursor.loopBlock) {
+      const index = this.song.arrangement.findIndex((b) => b.id === cursor.loopBlock);
+      cursor.index = index < 0 ? this.song.arrangement.length : index;
+      return;
+    }
     const next = block ? nextBlock(this.song, cursor.index) : -1;
     cursor.index = next < 0 ? this.song.arrangement.length : next;
   }
