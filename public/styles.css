@@ -544,7 +544,14 @@ input[type=range].centered::-moz-range-progress { background: transparent; }
 .viz-timeline .block.selected, .viz-timeline .block:hover { border-color: hsl(var(--hue) var(--tint-bright)); }
 .viz-timeline .block.selected { box-shadow: 0 0 0 1px hsl(var(--hue) var(--tint-bright)); }
 .viz-timeline li.now .block { background: hsl(var(--hue) var(--tint-fill-on)); }
-.viz-timeline .swatch { width: 16px; height: 16px; border-radius: 50%; border: 3px solid; flex: none; }
+/* A block's colours, on the block: solid where it sets them, dashed where they carry on from earlier. */
+.viz-timeline .look-chip {
+  display: flex; gap: 3px; flex: none; padding: 3px; border-radius: 5px;
+  border: 1px dashed hsl(var(--hue) var(--tint-line)); font-weight: normal;
+}
+.viz-timeline .look-chip.own { border-style: solid; border-color: hsl(var(--hue) var(--tint-bright)); }
+.viz-timeline .look-chip i { width: 13px; height: 13px; border-radius: 3px; }
+.viz-timeline .block:hover .look-chip, .viz-timeline .block.selected .look-chip { border-color: var(--fg); }
 .viz-blocks { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-height: 36px; }
 .viz-block { background: var(--panel-2); border-color: var(--line); padding: 8px 12px; }
 .viz-block small { color: var(--accent); }

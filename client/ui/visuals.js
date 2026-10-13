@@ -220,13 +220,15 @@ export function VisualsView({ store, engine }) {
               ${doc.arrangement.map((block, i) => {
                 const { p, i: pi } = patterns.get(block.pattern);
                 const blockSelected = selection.kind === 'block' && selection.blockId === block.id;
+                const look = { ...doc.look, ...styles[i] };
                 return html`
                   <li key=${block.id} class=${`${i === playingIndex ? 'now' : ''} ${isCopySource(block) ? 'copied-from' : ''}`} style=${`--hue: ${hue(pi)}; --length: ${p.length}`}>
                     <span class="bar" title="Start time">${fmtTime(times[i].start)}</span>
                     <button class=${`block ${blockSelected ? 'selected' : ''}`} onClick=${() => select({ kind: 'block', blockId: block.id }, i)}
-                      title="Set this block's look">
+                      title=${block.style ? 'This block changes the colours and look. Click to edit them'
+                        : `Colours and look ${styles[i] ? 'carried on from an earlier block' : 'from the song look'}. Click to change them from this block on`}>
                       <span class="name">${p.name}</span>
-                      ${block.style && html`<span class="swatch" style=${`background: ${styles[i].background ?? doc.look.background}; border-color: ${styles[i].lineColor ?? doc.look.lineColor}`}></span>`}
+                      <${LookChip} look=${look} own=${Boolean(block.style)} />
                     </button>
                     <div class="viz-blocks">
                       ${block.visuals.map((v) => html`
@@ -363,4 +365,19 @@ function VisualBrowser({ browse, added, limit, looping, onChange, onPlay, onSave
       <footer>${actions}</footer>
     </div>
   `;
+}
+
+/**
+ * A block's colours in a chip on the block itself — its background, with
+ * its line, accent and peak colours (if peak is on) — so the colours read
+ * as something the block has, and clicking it is how to change them. The
+ * outline is solid where the block sets its own look and dashed where it
+ * carries one on from earlier, like a visual continued from another block.
+ */
+function LookChip({ look, own }) {
+  const colours = [look.lineColor, look.accentColor, look.peakColor].filter(Boolean);
+  return html`
+    <span class=${`look-chip ${own ? 'own' : ''}`} style=${`background: ${look.background}`} aria-hidden="true">
+      ${colours.map((c, i) => html`<i key=${i} style=${`background: ${c}`}></i>`)}
+    </span>`;
 }
