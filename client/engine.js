@@ -7,6 +7,7 @@ import { FireflySim } from './firefly-sim.js';
 import { BeeSim } from './bee-sim.js';
 import { FrogSim } from './frog-sim.js';
 import { SandpileSim } from './sandpile-sim.js';
+import { LilySim } from './lily-sim.js';
 
 // The server serves the library's sample banks here (see server/app.js).
 Sampler.bankRoot = '/kits/';
@@ -19,6 +20,8 @@ const FLASH_VELOCITY = 0.75;    // a firefly flashing in its own time
 const PULLED_VELOCITY = 0.6;    // one set off by another's flash, a touch softer under it
 const CALL_VELOCITY = 0.7;      // a frog's call
 const FIRST_CALL_VELOCITY = 0.9;   // the first of a bout, an accent
+const DROP_VELOCITY = 0.75;     // a raindrop on a lily pad, as a plain click in the step grid
+const FLOWER_VELOCITY = 1;      // one on a lily flower: an accent, as a shift-click in the grid
 const TRACE_SECONDS = 2;        // how much of a simulation's history the editors can draw from
 const AUTOMATION_RESOLUTION = 4;   // automation values set per step
 
@@ -228,6 +231,7 @@ export class Engine {
         else if (kind === 'bees') this.#beeStep(pattern, track, muted, t, stepLength);
         else if (kind === 'frogs') this.#frogStep(pattern, track, muted, t, stepLength);
         else if (kind === 'sandpile') this.#sandpileStep(pattern, track, muted, t, stepLength);
+        else if (kind === 'lilypond') this.#lilyStep(pattern, track, muted, t, stepLength);
         else if (!muted) this.#gridStep(pattern, track, t, stepLength);
       }
       // Tubules hold their notes, so any left sounding from another pattern
@@ -496,6 +500,37 @@ export class Engine {
     }
   }
 
+  // Lily pond: let this step's rain fall on the track's pond, playing each
+  // drop that strikes a pad, accented on a flower. The rain carries on for
+  // the whole playback — unless the settings repeat it, starting it over
+  // from its seed at the start of every pass.
+  #lilyStep(pattern, track, muted, t, stepLength) {
+    const config = pattern.lilypond[track.id];
+    const key = simKey(pattern.id, track.id, 'lilypond');
+    let entry = this.sims.get(key);
+    if (!entry) {
+      entry = { sim: new LilySim(config), trace: [], hits: [] };
+      this.sims.set(key, entry);
+    }
+    entry.sim.sync(config);
+    if (config.repeat && this.cursor.step === 0) entry.sim.reseed();
+
+    entry.trace.push({ time: t, shower: entry.sim.shower() });
+    const drops = entry.sim.advance(1 / STEPS_PER_BEAT);
+    entry.trace.push({ time: t + stepLength, shower: entry.sim.shower() });
+    this.#trimTrace(entry);
+
+    // A muted track's pond still catches the rain; it just doesn't sound.
+    const live = muted ? null : this.live.get(track.id);
+    const notes = new Map(config.pads.map((p) => [p.id, p.note]));
+    for (const drop of drops) {
+      // A drop into open water makes no sound to snap, so it ripples as it falls.
+      const time = drop.pad ? this.#hitTime(config, t, stepLength, drop.at) : t + drop.at * stepLength * STEPS_PER_BEAT;
+      entry.hits.push({ time, x: drop.x, y: drop.y, pad: drop.pad, flower: drop.flower });
+      if (live && drop.pad) this.#queueOn(time, live.instrument, notes.get(drop.pad), drop.flower ? FLOWER_VELOCITY : DROP_VELOCITY, config.gate * stepLength);
+    }
+  }
+
   // When a hit `at` beats into the step starting at `t` sounds: right then,
   // or snapped forward to the next line of the settings' grid.
   #hitTime(config, t, stepLength, at) {
@@ -639,10 +674,10 @@ export class Engine {
   }
 
   /**
-   * What a track's balls, tubules, ants, fireflies, bees, frogs or sandpile
-   * in a pattern have been doing, for drawing: { trace: [{ time, balls |
-   * tubules | ants | bees | cells }], hits: [{ time, … }] } (fireflies and
-   * frogs have hits only).
+   * What a track's balls, tubules, ants, fireflies, bees, frogs, sandpile
+   * or lily pond in a pattern have been doing, for drawing: { trace: [{ time,
+   * balls | tubules | ants | bees | cells | shower }], hits: [{ time, … }] }
+   * (fireflies and frogs have hits only).
    * Null unless playing.
    */
   sequencerTrace(patternId, trackId, kind) {

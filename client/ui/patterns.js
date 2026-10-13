@@ -9,6 +9,7 @@ import { defaultFireflies } from '../../shared/fireflies.js';
 import { defaultBees } from '../../shared/bees.js';
 import { defaultFrogs } from '../../shared/frogs.js';
 import { defaultSandpile } from '../../shared/sandpile.js';
+import { defaultLilyPond } from '../../shared/lilypond.js';
 import { ARP_COUNTS, ORDERS, SHAPES, arpeggio } from '../../shared/arpeggio.js';
 import { plural } from './song-view.js';
 import { BounceEditor } from './bounce-editor.js';
@@ -18,6 +19,7 @@ import { FireflyEditor } from './firefly-editor.js';
 import { BeeEditor } from './bee-editor.js';
 import { FrogEditor } from './frog-editor.js';
 import { SandpileEditor } from './sandpile-editor.js';
+import { LilyEditor } from './lily-editor.js';
 import { AutomationLanes } from './automation.js';
 import { instrumentKeys } from './params.js';
 
@@ -33,6 +35,7 @@ const GENERATIVE = {
   bees: { label: 'Bees', fresh: defaultBees, Editor: BeeEditor, summary: (c) => plural(c.bees, 'bee') },
   frogs: { label: 'Frog chorus', fresh: defaultFrogs, Editor: FrogEditor, summary: (c) => plural(c.frogs.length, 'frog') },
   sandpile: { label: 'Sandpile', fresh: defaultSandpile, Editor: SandpileEditor, summary: (c) => `${c.size}×${c.size}` },
+  lilypond: { label: 'Lily pond', fresh: defaultLilyPond, Editor: LilyEditor, summary: (c) => plural(c.pads.length, 'pad') },
 };
 
 /** The keys of a track's instrument, as its params set it up; see instrumentKeys. */

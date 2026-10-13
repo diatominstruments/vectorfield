@@ -81,9 +81,9 @@ client/            Preact + htm, bundled by esbuild
   main.js          routes: / feed, /s/:id song page, /u/:username profile, /studio, /songs/:id editor, /settings, /notifications, /embed/:id
   theme.js         applies a theme (data-theme on <html>) and remembers it on the device
   engine.js        audio: song doc → live instrument chains + lookahead sequencer
-  bounce-sim.js, tubule-sim.js, ant-sim.js, firefly-sim.js, bee-sim.js, frog-sim.js, sandpile-sim.js
+  bounce-sim.js, tubule-sim.js, ant-sim.js, firefly-sim.js, bee-sim.js, frog-sim.js, sandpile-sim.js, lily-sim.js
                    the generative sequencers — bouncing balls, microtubules, an ant colony, fireflies, bees,
-                   a frog chorus, a sandpile — stepped by the engine; ui/*-editor.js edits and draws each
+                   a frog chorus, a sandpile, rain on a lily pond — stepped by the engine; ui/*-editor.js edits and draws each
   store.js         the song being edited, with debounced autosave
   ui/visual-canvas.js  gloaming-kit on a canvas: analyzes the engine's output, follows its clock
   ui/visuals.js    the editor's visuals tab; ui/player.js the read-only song page
@@ -94,7 +94,7 @@ client/            Preact + htm, bundled by esbuild
   ui/genre-picker.js  choosing genres, for a song's tags or a profile's interests
   ui/theme-picker.js  choosing a colour theme, at signup and in ui/settings.js
 shared/song.js     the song document format and its validation — both sides use it
-shared/bounce.js, shared/tubules.js, shared/ants.js, shared/fireflies.js, shared/bees.js, shared/frogs.js, shared/sandpile.js
+shared/bounce.js, shared/tubules.js, shared/ants.js, shared/fireflies.js, shared/bees.js, shared/frogs.js, shared/sandpile.js, shared/lilypond.js
                    each generative sequencer's settings and their validation
 shared/visuals.js  validation for the visual side: looks and the kit's signal-spec language
 shared/genres.js   the electronic music taxonomy (families → genres) used for tags
