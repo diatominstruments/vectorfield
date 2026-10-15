@@ -179,17 +179,21 @@ export function authRouter(db) {
 }
 
 /** Attaches `req.user` when the session cookie is valid. Never rejects. */
+/** The user whose session cookie came with this request, or null. */
+export async function sessionUser(db, req) {
+  const token = parseCookies(req.headers.cookie)[COOKIE];
+  if (!token) return null;
+  const { rows } = await db.query(
+    `select u.* from sessions s join users u on u.id = s.user_id
+     where s.token_hash = $1 and s.expires_at > now()`,
+    [hash(token)],
+  );
+  return rows[0] ?? null;
+}
+
 export function sessionMiddleware(db) {
   return async (req, _res, next) => {
-    const token = parseCookies(req.headers.cookie)[COOKIE];
-    if (token) {
-      const { rows } = await db.query(
-        `select u.* from sessions s join users u on u.id = s.user_id
-         where s.token_hash = $1 and s.expires_at > now()`,
-        [hash(token)],
-      );
-      req.user = rows[0] ?? null;
-    }
+    req.user = await sessionUser(db, req);
     next();
   };
 }

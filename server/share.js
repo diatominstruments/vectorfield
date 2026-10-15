@@ -1,13 +1,16 @@
 import { readFile } from 'node:fs/promises';
 import { Router } from 'express';
 import { config } from './config.js';
-import { sessionMiddleware } from './auth.js';
+import { sessionUser } from './auth.js';
 import { UUID } from './songs.js';
 import { SONG_WITH_OWNER } from './public.js';
 import { drawnCover } from './cover.js';
 import { COVER_SIZE, EMBED_SIZE, coverPath, embedCode, embedPath, embedSize, escapeHtml as esc, songPath } from '../shared/embed.js';
 
 const INDEX = new URL('../public/index.html', import.meta.url);
+
+// How many drawn covers to keep. Each is about 4 KB.
+const DRAWN_KEPT = 1000;
 
 /**
  * What a published song looks like from outside the app. Link previews
@@ -31,6 +34,24 @@ export function shareRouter(db) {
     if (!UUID.test(id)) return null;
     const { rows } = await db.query(`${SONG_WITH_OWNER} where s.id = $1 and s.published_at is not null`, [id]);
     return rows[0] ?? null;
+  };
+
+  // Drawn covers, by song id, with the revision each was drawn from. Drawing
+  // one is a few milliseconds of CPU that nothing else can run during, and a
+  // feed page asks for twenty, but a drawing only changes when its song is
+  // saved. The least recently used go first.
+  const drawn = new Map();
+  const drawnCoverFor = async (id, revision) => {
+    let entry = drawn.get(id);
+    drawn.delete(id);   // set again below, as the most recently used
+    if (entry?.revision !== revision) {
+      const { rows } = await db.query('select doc, revision from songs where id = $1', [id]);
+      if (!rows[0]) return null;
+      entry = { revision: rows[0].revision, png: drawnCover(rows[0].doc) };
+    }
+    drawn.set(id, entry);
+    if (drawn.size > DRAWN_KEPT) drawn.delete(drawn.keys().next().value);
+    return entry.png;
   };
 
   const sendPage = async (req, res, song, { embed = false } = {}) => {
@@ -57,20 +78,26 @@ export function shareRouter(db) {
 
   // A song's picture: the frame the owner chose, or one drawn from the
   // song. Anyone may see a published song's; an unpublished song's only
-  // its owner, picking one in the Publish tab.
-  router.get('/covers/:id', sessionMiddleware(db), async (req, res) => {
+  // its owner, picking one in the Publish tab, so only then does it matter
+  // who's asking. The song's document is read only to draw one.
+  router.get('/covers/:id', async (req, res) => {
     if (!UUID.test(req.params.id)) return res.sendStatus(404);
     const { rows } = await db.query(
-      `select s.doc, s.owner_id, s.published_at, c.image from songs s left join song_covers c on c.song_id = s.id
+      `select s.revision, s.owner_id, s.published_at, c.image from songs s left join song_covers c on c.song_id = s.id
        where s.id = $1`,
       [req.params.id],
     );
     const row = rows[0];
-    const mine = row && req.user && String(row.owner_id) === String(req.user.id);
-    if (!row || (!row.published_at && !mine)) return res.sendStatus(404);
+    if (!row) return res.sendStatus(404);
+    if (!row.published_at) {
+      const user = await sessionUser(db, req);
+      if (!user || String(user.id) !== String(row.owner_id)) return res.sendStatus(404);
+    }
     res.setHeader('Cache-Control', row.published_at ? 'public, max-age=300' : 'private, no-cache');
     if (row.image) return res.type('jpeg').send(Buffer.from(row.image));
-    res.type('png').send(drawnCover(row.doc));
+    const png = await drawnCoverFor(req.params.id, row.revision);
+    if (!png) return res.sendStatus(404);
+    res.type('png').send(png);
   });
 
   // oEmbed (https://oembed.com): given a song's link, the iframe to embed it.

@@ -101,6 +101,21 @@ test('oEmbed gives the player for a song link', async () => {
   assert.equal((await fetch(`${origin}/oembed?url=${url}&format=xml`)).status, 501);
 });
 
+test('a drawn cover is drawn again once its song is saved', async () => {
+  const { api, id } = await songBy('Rosa');
+  const picture = async () => Buffer.from(await (await fetch(`${origin}/covers/${id}`)).arrayBuffer());
+  const first = await picture();
+  assert.deepEqual(await picture(), first);
+
+  // A drum hit on every step instead of every fourth: every bar is as tall as the tallest.
+  const { song } = (await api(`/songs/${id}`)).body;
+  const drums = song.doc.tracks[0].id;
+  song.doc.patterns[0].notes[drums] = Array.from({ length: 16 }, (_, step) => ({ step, note: 36, velocity: 1, length: 1 }));
+  const saved = await api(`/songs/${id}`, { method: 'PUT', body: { title: song.title, revision: song.revision, doc: song.doc } });
+  assert.equal(saved.status, 200);
+  assert.notDeepEqual(await picture(), first);
+});
+
 test('embed sizes stay 16:9 within the bounds asked for', () => {
   assert.deepEqual(embedSize(), { width: 640, height: 360 });
   assert.deepEqual(embedSize(1000), { width: 640, height: 360 });
@@ -115,6 +130,7 @@ test('the picture is picked with publishing, and shows in feeds and previews', a
 
   // Before publishing only the owner sees it: drawn from the song, at the picture's size.
   assert.equal((await cover(`/covers/${id}`)).status, 404);
+  assert.equal((await cover(`/covers/${id}`, await sessionCookie('Mallory'))).status, 404);
   const ownerCookie = await sessionCookie('Evie');
   const drawn = await cover(`/covers/${id}`, ownerCookie);
   assert.equal(drawn.headers.get('content-type'), 'image/png');
