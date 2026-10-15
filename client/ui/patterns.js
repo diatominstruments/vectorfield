@@ -1,4 +1,4 @@
-import { useRef, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { registry } from 'gloaming-instruments';
 import { html, hue, noteName, isBlackKey, useEngineEvent } from '../lib.js';
 import { LIMITS, PATTERN_LENGTHS, newPattern, newId, sequencerOf, pruneAutomation } from '../../shared/song.js';
@@ -11,6 +11,7 @@ import { defaultFrogs } from '../../shared/frogs.js';
 import { defaultSandpile } from '../../shared/sandpile.js';
 import { defaultLilyPond } from '../../shared/lilypond.js';
 import { ARP_COUNTS, ORDERS, SHAPES, arpeggio } from '../../shared/arpeggio.js';
+import { moveNotes, noteKey, notesInBox } from '../../shared/note-edits.js';
 import { plural } from './song-view.js';
 import { BounceEditor } from './bounce-editor.js';
 import { TubuleEditor } from './tubule-editor.js';
@@ -248,6 +249,26 @@ function PatternHeader({ store, pattern, onSelect }) {
 /** Lengths offered for new notes, in steps (sixteenths). */
 const NOTE_LENGTHS = [[1, '1/16'], [2, '1/8'], [4, '1/4'], [8, '1/2'], [16, '1 bar']];
 
+// The last change made to a step grid's notes, for its Undo: where it was
+// made, what it did, the notes and selection from before it, and the
+// song's edit count just after it, so Undo is only offered while nothing
+// else has changed since. Kept outside the grid so it outlasts switching
+// tracks, and tied to its song so it can't reach into another.
+let lastEdit = null;
+
+// What to hold to select notes, and to undo, as this computer names them.
+const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+const SELECT_KEY = MAC ? 'Ctrl or ⌘' : 'Ctrl';
+const UNDO_KEY = MAC ? '⌘Z' : 'Ctrl+Z';
+
+// Pitched rows' shift-arrows move a beat sideways or an octave up and down.
+const NUDGES = {
+  ArrowLeft: (shift) => ({ steps: shift ? -4 : -1, rows: 0 }),
+  ArrowRight: (shift) => ({ steps: shift ? 4 : 1, rows: 0 }),
+  ArrowUp: (shift, pitched) => ({ steps: 0, rows: shift && pitched ? 12 : 1 }),
+  ArrowDown: (shift, pitched) => ({ steps: 0, rows: shift && pitched ? -12 : -1 }),
+};
+
 /**
  * The step sequencer. Drum-style instruments (those naming their `keys`)
  * get one row per sound, and every hit is a one-shot. Pitched instruments
@@ -260,10 +281,26 @@ const NOTE_LENGTHS = [[1, '1/16'], [2, '1/8'], [4, '1/4'], [8, '1/2'], [16, '1 b
  *   drag a note             resize it (its start stays put)
  *   click a note            remove it
  *   shift-click             accent
+ *
+ * And in either, to work on several notes at once:
+ *
+ *   ctrl-drag (or ⌘-drag)    select the notes in a box; with shift, add them
+ *   ctrl-click a note        select it, or let it go
+ *   drag a selected note     move every selected note (on a piano roll, its
+ *                            last step still stretches it instead)
+ *   arrow keys               nudge them a step or a row; with shift, a beat
+ *                            or an octave
+ *   Delete / Backspace       remove them
+ *   Esc, or click an empty cell   let them go
+ *
+ * Undo (or ctrl/⌘-Z) takes back the last change to the notes, a whole drag
+ * at a time.
  */
 function StepGrid({ store, engine, pattern, track, trackIndex, newLength, arp }) {
   const keys = trackKeys(track);
   const [baseOctave, setBaseOctave] = useState(keys ? 0 : defaultOctave(pattern.notes[track.id]));
+  const [picked, setPicked] = useState(() => new Set());   // keys of the selected notes
+  const [box, setBox] = useState(null);                     // the selection box being dragged, in px within the grid
   const gridRef = useRef();
   const drag = useRef(null);
   const position = useEngineEvent(engine, 'position', engine.position);
@@ -280,23 +317,83 @@ function StepGrid({ store, engine, pattern, track, trackIndex, newLength, arp })
   const hi = rows[0].note;
   const above = keys ? 0 : notes.filter((n) => n.note > hi).length;
   const below = keys ? 0 : notes.filter((n) => n.note < lo).length;
+  // The pitches a note can move between, bottom row first.
+  const scale = keys ? rows.map((r) => r.note).reverse() : Array.from({ length: 128 }, (_, i) => i);
+  // Notes taken away or changed some other way are no longer selected.
+  const selected = new Set(notes.map(noteKey).filter((k) => picked.has(k)));
 
-  const editNotes = (fn) => store.edit((d) => {
-    const p = d.patterns.find((x) => x.id === pattern.id);
-    p.notes[track.id] = fn(p.notes[track.id] ?? []);
-    if (!p.notes[track.id].length) delete p.notes[track.id];
-  });
+  // Every change to the notes goes through here, so the last one can be
+  // undone; the edits of one drag undo together.
+  const editNotes = (fn, label) => {
+    const g = drag.current;
+    const continuing = g?.undo && g.undo === lastEdit;
+    let applied = false;
+    store.edit((d) => {
+      const p = d.patterns.find((x) => x.id === pattern.id);
+      const before = p.notes[track.id] ?? [];
+      if (!continuing) {
+        lastEdit = { song: store.id, pattern: pattern.id, track: track.id, label, notes: structuredClone(before), selected: [...selected] };
+        if (g) g.undo = lastEdit;
+      }
+      p.notes[track.id] = fn(before);
+      if (!p.notes[track.id].length) delete p.notes[track.id];
+      applied = true;
+    });
+    if (applied) lastEdit.at = store.editCount;
+  };
+
+  const canUndo = lastEdit?.song === store.id && lastEdit.pattern === pattern.id && lastEdit.track === track.id && lastEdit.at === store.editCount;
+  const undo = () => {
+    if (!canUndo) return;
+    const { notes: before, selected: was } = lastEdit;
+    lastEdit = null;
+    store.edit((d) => {
+      const p = d.patterns.find((x) => x.id === pattern.id);
+      if (before.length) p.notes[track.id] = before;
+      else delete p.notes[track.id];
+    });
+    setPicked(new Set(was));
+  };
 
   // Notes are identified by pitch and start step: the same row never holds
   // two notes starting on one step.
   const sameNote = (n, note, step) => n.note === note && n.step === step;
-  const removeNote = (note, step) => editNotes((list) => list.filter((n) => !sameNote(n, note, step)));
+  const removeNote = (note, step) => editNotes((list) => list.filter((n) => !sameNote(n, note, step)), 'removing a note');
   const resizeNote = (note, step, length) =>
-    editNotes((list) => list.map((n) => (sameNote(n, note, step) ? { ...n, length } : n)));
+    editNotes((list) => list.map((n) => (sameNote(n, note, step) ? { ...n, length } : n)), 'stretching a note');
+
+  const deleteSelected = () => {
+    editNotes((list) => list.filter((n) => !selected.has(noteKey(n))), `deleting ${plural(selected.size, 'note')}`);
+    setPicked(new Set());
+  };
+  const nudge = (by) => {
+    const moved = moveNotes(notes, selected, by, { length: pattern.length, scale });
+    if (!moved.by.steps && !moved.by.rows) return;
+    editNotes(() => moved.notes, `moving ${plural(selected.size, 'note')}`);
+    setPicked(moved.keys);
+  };
 
   const stepAt = (clientX) => {
     const rect = gridRef.current.getBoundingClientRect();
     return Math.max(0, Math.min(pattern.length - 1, Math.floor(((clientX - rect.left) / rect.width) * pattern.length)));
+  };
+  const rowAt = (clientY) => {
+    const first = gridRef.current.querySelector('.row').getBoundingClientRect();
+    return Math.max(0, Math.min(rows.length - 1, Math.floor((clientY - first.top) / first.height)));
+  };
+  // Where the pointer is in the grid, in px, kept inside it.
+  const within = (e) => {
+    const rect = gridRef.current.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(rect.width, e.clientX - rect.left)),
+      y: Math.max(0, Math.min(rect.height, e.clientY - rect.top)),
+    };
+  };
+  // On a piano roll, the right half of a note's last step is its handle for stretching.
+  const onStretchHandle = (e, n, step) => {
+    if (keys || step !== n.step + n.length - 1) return false;
+    const rect = gridRef.current.getBoundingClientRect();
+    return e.clientX - rect.left >= ((step + 0.5) / pattern.length) * rect.width;
   };
 
   // A note may grow rightward up to the next note on its row, or the pattern's end.
@@ -316,28 +413,46 @@ function StepGrid({ store, engine, pattern, track, trackIndex, newLength, arp })
         out.push({ step: at, note, velocity, length: Math.min(newLength, roomAfter(note, at, out)) });
       });
       return out;
-    });
+    }, 'adding a run');
     engine.audition(track.id, root, velocity);
   };
 
   const onPointerDown = (e, note) => {
-    if (e.button !== 0) return;
+    const boxing = e.ctrlKey || e.metaKey;
+    // On a Mac, a ctrl-click can come through as a right click.
+    if (e.button !== 0 && !(boxing && e.button === 2)) return;
     const step = stepAt(e.clientX);
+    const row = rowAt(e.clientY);
     const hit = notes.find((n) => n.note === note && n.step <= step && step < n.step + n.length);
+
+    if (boxing) {
+      drag.current = { kind: 'box', from: within(e), step, row, hit, add: e.shiftKey, base: selected, moved: false };
+      gridRef.current.setPointerCapture(e.pointerId);
+      return;
+    }
+    if (hit && selected.has(noteKey(hit)) && !onStretchHandle(e, hit, step)) {
+      // Nothing changes yet: moving drags the selection along, releasing in place removes the note.
+      drag.current = { kind: 'move', hit, step, row, origin: notes, keys: selected, by: { steps: 0, rows: 0 }, moved: false };
+      gridRef.current.setPointerCapture(e.pointerId);
+      return;
+    }
+    // With notes selected, a click on an empty cell lets them go rather than adding one.
+    if (!hit && selected.size) return setPicked(new Set());
 
     if (hit && keys) return removeNote(note, hit.step);
     if (hit) {
       // Nothing changes yet: moving makes this a resize, releasing in place a removal.
-      drag.current = { note, start: hit.step, length: hit.length, max: roomAfter(note, hit.step), downStep: step, moved: false, existing: true };
+      drag.current = { kind: 'resize', note, start: hit.step, length: hit.length, max: roomAfter(note, hit.step), downStep: step, moved: false, existing: true };
     } else {
       if (notes.length >= LIMITS.notesPerTrack) return;
       const velocity = e.shiftKey ? 1 : 0.75;
       if (!keys && arp?.shape !== 'single') return placeArpeggio(note, step, velocity);
       const length = keys ? 1 : Math.min(newLength, roomAfter(note, step));
-      editNotes((list) => [...list, { step, note, velocity, length }]);
+      // Started first, so stretching the new note undoes along with adding it.
+      if (!keys) drag.current = { kind: 'resize', note, start: step, length, max: roomAfter(note, step), downStep: step, moved: false, existing: false };
+      editNotes((list) => [...list, { step, note, velocity, length }], 'adding a note');
       engine.audition(track.id, note, velocity);
       if (keys) return;
-      drag.current = { note, start: step, length, max: roomAfter(note, step), downStep: step, moved: false, existing: false };
     }
     gridRef.current.setPointerCapture(e.pointerId);
   };
@@ -345,6 +460,8 @@ function StepGrid({ store, engine, pattern, track, trackIndex, newLength, arp })
   const onPointerMove = (e) => {
     const d = drag.current;
     if (!d) return;
+    if (d.kind === 'box') return dragBox(d, e);
+    if (d.kind === 'move') return dragSelection(d, e);
     const step = stepAt(e.clientX);
     if (step !== d.downStep) d.moved = true;
     if (!d.moved) return;
@@ -354,13 +471,85 @@ function StepGrid({ store, engine, pattern, track, trackIndex, newLength, arp })
     resizeNote(d.note, d.start, length);
   };
 
+  // Select whatever the box touches, as it's drawn.
+  const dragBox = (d, e) => {
+    const at = within(e);
+    if (!d.moved && Math.hypot(at.x - d.from.x, at.y - d.from.y) < 4) return;
+    d.moved = true;
+    setBox({ x: Math.min(d.from.x, at.x), y: Math.min(d.from.y, at.y), w: Math.abs(at.x - d.from.x), h: Math.abs(at.y - d.from.y) });
+    const [r0, r1] = [d.row, rowAt(e.clientY)].sort((a, b) => a - b);
+    const [s0, s1] = [d.step, stepAt(e.clientX)].sort((a, b) => a - b);
+    const inside = notesInBox(notes, [s0, s1], new Set(rows.slice(r0, r1 + 1).map((r) => r.note)));
+    setPicked(d.add ? new Set([...d.base, ...inside]) : inside);
+  };
+
+  // Move the selection with the pointer: always from where it started, so
+  // a note passed over on the way isn't harmed, only one it ends up on.
+  const dragSelection = (d, e) => {
+    const step = stepAt(e.clientX);
+    const row = rowAt(e.clientY);
+    if (step !== d.step || row !== d.row) d.moved = true;
+    const moved = moveNotes(d.origin, d.keys, { steps: step - d.step, rows: d.row - row }, { length: pattern.length, scale });
+    if (moved.by.steps === d.by.steps && moved.by.rows === d.by.rows) return;
+    const pitchChanged = moved.by.rows !== d.by.rows;
+    d.by = moved.by;
+    editNotes(() => moved.notes, `moving ${plural(d.keys.size, 'note')}`);
+    setPicked(moved.keys);
+    if (pitchChanged) engine.audition(track.id, scale[scale.indexOf(d.hit.note) + moved.by.rows], d.hit.velocity);
+  };
+
   const onPointerUp = () => {
     const d = drag.current;
     drag.current = null;
-    if (d?.existing && !d.moved) removeNote(d.note, d.start);
+    if (!d) return;
+    if (d.kind === 'box') {
+      setBox(null);
+      if (d.moved) return;
+      // A ctrl-click: a note in or out of the selection, or on an empty cell, letting go of them all.
+      if (d.hit) {
+        const next = new Set(selected);
+        if (!next.delete(noteKey(d.hit))) next.add(noteKey(d.hit));
+        setPicked(next);
+      } else if (!d.add) {
+        setPicked(new Set());
+      }
+      return;
+    }
+    if (d.kind === 'move' && !d.moved) return removeNote(d.hit.note, d.hit.step);
+    if (d.existing && !d.moved) removeNote(d.note, d.start);
   };
 
-  const cancelDrag = () => { drag.current = null; };
+  const cancelDrag = () => {
+    drag.current = null;
+    setBox(null);
+  };
+
+  // Keys: undo anywhere on the page; nudge, delete and let go while notes are selected.
+  const onKey = useRef();
+  onKey.current = (e) => {
+    if (e.target.closest?.('input, select, textarea')) return;
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z') {
+      if (!canUndo) return;
+      e.preventDefault();
+      return undo();
+    }
+    if (!selected.size || mod || e.altKey) return;
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault();
+      deleteSelected();
+    } else if (e.key === 'Escape') {
+      setPicked(new Set());
+    } else if (NUDGES[e.key]) {
+      e.preventDefault();
+      nudge(NUDGES[e.key](e.shiftKey, !keys));
+    }
+  };
+  useEffect(() => {
+    const listener = (e) => onKey.current(e);
+    addEventListener('keydown', listener);
+    return () => removeEventListener('keydown', listener);
+  }, []);
 
   // cell lookup: "note:step" → { note, part: 'start' | 'held' | 'end' | 'single' }
   const cells = new Map();
@@ -371,13 +560,18 @@ function StepGrid({ store, engine, pattern, track, trackIndex, newLength, arp })
     }
   }
 
+  const what = keys ? 'hit' : 'note';
   return html`
     <div class="step-grid" style=${`--hue: ${hue(trackIndex)}; --steps: ${pattern.length}`}>
-      ${!keys && html`
-        <div class="octave">
+      <div class="grid-tools">
+        ${!keys && html`
           <button class="ghost" disabled=${baseOctave >= 7} onClick=${() => setBaseOctave(baseOctave + 1)}>▲ Octave ${above ? html`<em>${above} above</em>` : ''}</button>
-          <button class="ghost" disabled=${baseOctave <= 0} onClick=${() => setBaseOctave(baseOctave - 1)}>▼ Octave ${below ? html`<em>${below} below</em>` : ''}</button>
-        </div>`}
+          <button class="ghost" disabled=${baseOctave <= 0} onClick=${() => setBaseOctave(baseOctave - 1)}>▼ Octave ${below ? html`<em>${below} below</em>` : ''}</button>`}
+        <span class="spacer"></span>
+        ${selected.size > 0 && html`<span class="selection">${plural(selected.size, what)} selected</span>`}
+        <button class="ghost" disabled=${!canUndo} onClick=${undo}
+          title=${canUndo ? `Undo ${lastEdit.label} (${UNDO_KEY})` : 'Nothing to undo: Undo takes back the last change to these notes'}>↶ Undo</button>
+      </div>
       <div class="grid-wrap">
         <div class="labels">
           <div class="corner"></div>
@@ -390,7 +584,8 @@ function StepGrid({ store, engine, pattern, track, trackIndex, newLength, arp })
                 onClick=${() => engine.audition(track.id, r.note)}>${r.note % 12 === 0 ? r.label : ''}</button>`)}
         </div>
         <div class=${`cells ${keys ? '' : 'pitched'}`} ref=${gridRef}
-          onPointerMove=${onPointerMove} onPointerUp=${onPointerUp} onPointerCancel=${cancelDrag}>
+          onPointerMove=${onPointerMove} onPointerUp=${onPointerUp} onPointerCancel=${cancelDrag}
+          onContextMenu=${(e) => { if (e.ctrlKey || drag.current) e.preventDefault(); }}>
           <div class="step-numbers">
             ${Array.from({ length: pattern.length }, (_, s) => html`
               <span key=${s} class=${`${s % 4 === 0 ? 'beat' : ''} ${s === playStep ? 'now' : ''}`}>${s % 4 === 0 ? s / 4 + 1 : ''}</span>`)}
@@ -400,17 +595,20 @@ function StepGrid({ store, engine, pattern, track, trackIndex, newLength, arp })
               ${Array.from({ length: pattern.length }, (_, s) => {
                 const c = cells.get(`${r.note}:${s}`);
                 const cls = ['cell', s % 4 === 0 && 'beat', s === playStep && 'now',
-                  c && `on ${c.part}`, c && c.n.velocity >= 0.95 && 'accent'].filter(Boolean).join(' ');
+                  c && `on ${c.part}`, c && c.n.velocity >= 0.95 && 'accent', c && selected.has(noteKey(c.n)) && 'selected'].filter(Boolean).join(' ');
                 return html`<div key=${s} class=${cls}></div>`;
               })}
             </div>`)}
+          ${box && html`<div class="select-box" style=${`left: ${box.x}px; top: ${box.y}px; width: ${box.w}px; height: ${box.h}px`}></div>`}
         </div>
       </div>
-      <p class="hint muted">${keys
-        ? 'Click to add or remove a hit; drum hits are one-shots, so they have no length. Shift-click for an accent.'
-        : arp?.shape !== 'single'
-          ? `Click to lay down a ${SHAPES[arp.shape].label.toLowerCase()} run of ${arp.count} notes from that note, ${ORDERS[arp.order].toLowerCase()}, one note per new-note length. Drag a note to resize it; click it to remove. Shift-click for accents.`
-          : 'Click to add a note, or drag to stretch it as you place it. Drag a note to resize it; click it to remove. Shift-click for an accent. On a mono synth, overlapping notes slide.'}</p>
+      <p class="hint muted">${selected.size
+        ? `${plural(selected.size, what)} selected. Drag one to move them all${keys ? '' : ' (its last step still stretches it)'}; the arrow keys nudge them${keys ? '' : ', with Shift by a beat or an octave'}; Delete removes them; Esc or a click on an empty cell lets them go.`
+        : `${keys
+          ? 'Click to add or remove a hit; drum hits are one-shots, so they have no length. Shift-click for an accent.'
+          : arp?.shape !== 'single'
+            ? `Click to lay down a ${SHAPES[arp.shape].label.toLowerCase()} run of ${arp.count} notes from that note, ${ORDERS[arp.order].toLowerCase()}, one note per new-note length. Drag a note to resize it; click it to remove. Shift-click for accents.`
+            : 'Click to add a note, or drag to stretch it as you place it. Drag a note to resize it; click it to remove. Shift-click for an accent. On a mono synth, overlapping notes slide.'} Hold ${SELECT_KEY} and drag to select several ${what}s.`}</p>
     </div>
   `;
 }

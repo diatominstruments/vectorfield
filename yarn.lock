@@ -484,9 +484,9 @@ get-proto@^1.0.1:
     dunder-proto "^1.0.1"
     es-object-atoms "^1.0.0"
 
-"gloaming-instruments@github:diatominstruments/gloaming-instruments#25e3ca384a87e07fb5809267ac1bae1b998b65ef":
+"gloaming-instruments@github:diatominstruments/gloaming-instruments#c9475c818b9d657fb0aa3c0fb3cf8aca52ff77b8":
   version "0.1.0"
-  resolved "https://codeload.github.com/diatominstruments/gloaming-instruments/tar.gz/25e3ca384a87e07fb5809267ac1bae1b998b65ef"
+  resolved "https://codeload.github.com/diatominstruments/gloaming-instruments/tar.gz/c9475c818b9d657fb0aa3c0fb3cf8aca52ff77b8"
 
 "gloaming-kit@github:diatominstruments/gloaming-kit#b15b3d133c18ef25728e405d60f60049408c01f9":
   version "0.1.0"
