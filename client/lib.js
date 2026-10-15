@@ -36,6 +36,36 @@ export function Link({ href, children, ...props }) {
   return html`<a href=${href} onClick=${onClick} ...${props}>${children}</a>`;
 }
 
+/**
+ * A page whose code is downloaded the first time it's shown, so what only
+ * it needs stays out of the bundle every page loads. `load` resolves to the
+ * component. Call `preload()` to start the download before the page mounts.
+ * A failed download (a deploy replaced the chunk, say) is retried the next
+ * time the page is shown.
+ */
+export function lazy(load) {
+  let Component = null;
+  let pending = null;
+  const start = () => (pending ??= load().then(
+    (C) => (Component = C),
+    (err) => { pending = null; throw err; },
+  ));
+
+  function Lazy(props) {
+    const [failed, setFailed] = useState(false);
+    const [, loaded] = useReducer((n) => n + 1, 0);
+    useEffect(() => {
+      if (!Component) start().then(loaded, () => setFailed(true));
+    }, []);
+    if (Component) return h(Component, props);
+    return failed
+      ? html`<p class="error loading">This page didn't load. Check your connection and reload.</p>`
+      : html`<div class="loading">Loading…</div>`;
+  }
+  Lazy.preload = () => { start().catch(() => {}); };
+  return Lazy;
+}
+
 /** Sets the document title: "Page · Vectorfield", or just the brand for null. */
 export function useTitle(title) {
   useEffect(() => {
@@ -55,6 +85,8 @@ export const ago = (iso) => {
   if (s < 86400 * 7) return `${Math.floor(s / 86400)} d ago`;
   return new Date(iso).toLocaleDateString();
 };
+
+export const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 // ---- subscriptions -------------------------------------------------------------
 

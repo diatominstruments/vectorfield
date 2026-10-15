@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { registry } from 'gloaming-instruments';
-import { html, hue, noteName, isBlackKey, useEngineEvent } from '../lib.js';
+import { html, hue, noteName, isBlackKey, plural, useEngineEvent } from '../lib.js';
 import { LIMITS, PATTERN_LENGTHS, newPattern, newId, sequencerOf, pruneAutomation } from '../../shared/song.js';
 import { defaultBounce } from '../../shared/bounce.js';
 import { defaultTubules } from '../../shared/tubules.js';
@@ -12,7 +12,6 @@ import { defaultSandpile } from '../../shared/sandpile.js';
 import { defaultLilyPond } from '../../shared/lilypond.js';
 import { ARP_COUNTS, ORDERS, SHAPES, arpeggio } from '../../shared/arpeggio.js';
 import { moveNotes, noteKey, notesInBox } from '../../shared/note-edits.js';
-import { plural } from './song-view.js';
 import { BounceEditor } from './bounce-editor.js';
 import { TubuleEditor } from './tubule-editor.js';
 import { AntEditor } from './ant-editor.js';

@@ -17,8 +17,27 @@ async function request(method, path, body) {
   return data;
 }
 
+// GETs started before the page that wants them has mounted (see prefetch).
+const early = new Map();
+const EARLY_FOR_MS = 10_000;
+
 export const api = {
-  get: (path) => request('GET', path),
+  get(path) {
+    const pending = early.get(path);
+    early.delete(path);
+    return pending ?? request('GET', path);
+  },
+  /**
+   * Start a GET that a page is about to make, so it overlaps whatever comes
+   * first. The page's own get() of the same path takes the response, if it
+   * asks within a few seconds; after that it's stale and fetched again.
+   */
+  prefetch(path) {
+    const pending = request('GET', path);
+    pending.catch(() => {});   // a failure is reported to whoever takes it
+    early.set(path, pending);
+    setTimeout(() => early.get(path) === pending && early.delete(path), EARLY_FOR_MS);
+  },
   post: (path, body = {}) => request('POST', path, body),
   put: (path, body) => request('PUT', path, body),
   delete: (path) => request('DELETE', path),

@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'preact/hooks';
-import { html, Link, ago, useTitle } from '../lib.js';
+import { html, Link, ago, plural, useTitle } from '../lib.js';
 import { api } from '../api.js';
 import { TagChips } from './genre-picker.js';
 import { coverPath } from '../../shared/embed.js';
-import { plural } from './song-view.js';
 
 /** A published song as feeds and profiles list it: its picture, then what it is and who made it. */
 export function SongCard({ song, showOwner = true }) {
@@ -35,6 +34,13 @@ export function SongCard({ song, showOwner = true }) {
 
 const TABS = [['new', 'New'], ['for-you', 'For you']];
 
+/** The API path for a page of a feed tab, starting after `before` if given. */
+export function feedPath(tab, before) {
+  const query = new URLSearchParams({ tab });
+  if (before) query.set('before', before);
+  return `/public/feed?${query}`;
+}
+
 /**
  * The home feed. New is everything published, newest first; For you is
  * the songs tagged with genres the signed-in user is into.
@@ -46,9 +52,7 @@ export function Feed({ user }) {
 
   const load = (before) => {
     setState((s) => ({ ...s, loading: true, error: null }));
-    const query = new URLSearchParams({ tab });
-    if (before) query.set('before', before);
-    api.get(`/public/feed?${query}`).then(
+    api.get(feedPath(tab, before)).then(
       ({ songs, nextBefore, noInterests }) => setState((s) => ({
         songs: before ? [...s.songs, ...songs] : songs, nextBefore, noInterests: Boolean(noInterests), loading: false, error: null,
       })),

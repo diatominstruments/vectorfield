@@ -13,11 +13,18 @@ export const card = (r) => ({
   owner: { id: String(r.owner_id), username: r.owner_username, avatarUrl: r.owner_avatar },
 });
 
-export const SONG_WITH_OWNER = `
-  select s.*, u.username as owner_username, u.avatar_url as owner_avatar, c.updated_at as cover_at,
-    (select count(*)::int from song_likes l where l.song_id = s.id) as like_count
+// What a card needs, and not the song's document: lists never show it, and
+// at up to half a megabyte a song it would outweigh everything else.
+const CARD_COLUMNS = `
+  s.id, s.owner_id, s.title, s.revision, s.updated_at, s.description, s.tags, s.published_at,
+  u.username as owner_username, u.avatar_url as owner_avatar, c.updated_at as cover_at,
+  (select count(*)::int from song_likes l where l.song_id = s.id) as like_count`;
+
+const FROM_SONGS_WITH_OWNER = `
   from songs s join users u on u.id = s.owner_id
   left join song_covers c on c.song_id = s.id`;
+
+export const SONG_WITH_OWNER = `select ${CARD_COLUMNS} ${FROM_SONGS_WITH_OWNER}`;
 
 /** The user with this username, or null: the name is the profile's address. */
 export async function findUser(db, username) {
@@ -117,7 +124,7 @@ export function publicRouter(db) {
   // A song, with its document and likes, for the read-only page.
   router.get('/songs/:id', async (req, res) => {
     if (!UUID.test(req.params.id)) return res.status(404).json({ error: 'Song not found' });
-    const { rows } = await db.query(`${SONG_WITH_OWNER} where s.id = $1`, [req.params.id]);
+    const { rows } = await db.query(`select ${CARD_COLUMNS}, s.doc ${FROM_SONGS_WITH_OWNER} where s.id = $1`, [req.params.id]);
     const row = rows[0];
     const mine = row && req.user && String(row.owner_id) === String(req.user.id);
     if (!row || (!row.published_at && !mine)) return res.status(404).json({ error: 'Song not found' });

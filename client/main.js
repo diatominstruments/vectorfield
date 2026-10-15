@@ -1,18 +1,21 @@
 import { render } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
-import { html, usePath, Link, navigate } from './lib.js';
+import { html, usePath, Link, navigate, lazy } from './lib.js';
 import { api } from './api.js';
 import { SignIn } from './ui/sign-in.js';
 import { SongList } from './ui/song-list.js';
-import { Editor } from './ui/editor.js';
-import { Feed } from './ui/feed.js';
+import { Feed, feedPath } from './ui/feed.js';
 import { Profile } from './ui/profile.js';
-import { SongPage } from './ui/player.js';
 import { ChooseUsername } from './ui/choose-username.js';
 import { Settings } from './ui/settings.js';
-import { EmbedPage } from './ui/embed.js';
 import { Notifications, NotificationBell, useUnread } from './ui/notifications.js';
 import { applyTheme, storedTheme } from './theme.js';
+
+// The pages that play songs bring the audio engine, the instruments, the
+// visuals and three.js, most of the app's code, so they load on first use.
+const Editor = lazy(() => import('./ui/editor.js').then((m) => m.Editor));
+const SongPage = lazy(() => import('./ui/player.js').then((m) => m.SongPage));
+const EmbedPage = lazy(() => import('./ui/embed.js').then((m) => m.EmbedPage));
 
 const EDITOR_VIEWS = 'instruments|patterns|song|visuals|publish';
 
@@ -40,6 +43,22 @@ function route(path) {
   if ((m = /^\/u\/([a-z0-9_]+)(?:\/(likes))?$/i.exec(path))) return { name: 'profile', username: m[1].toLowerCase(), tab: m[2] ?? 'songs' };
   if ((m = new RegExp(`^/songs/([0-9a-f-]+)(?:/(${EDITOR_VIEWS}))?$`).exec(path))) return { name: 'editor', id: m[1], view: m[2] ?? 'instruments', auth: true };
   return { name: 'missing' };
+}
+
+// The embed player stands apart from the app: no session, no header, no
+// navigation, just the song in its frame.
+const embed = /^\/embed\/([0-9a-f-]+)$/.exec(location.pathname);
+
+// Everything else starts what its first page needs now, rather than after
+// the first render: the session check, and alongside it the page's own
+// data or code.
+if (!embed) {
+  api.prefetch('/auth/me');
+  api.prefetch('/config');
+  const first = route(location.pathname);
+  if (first.name === 'feed') api.prefetch(feedPath('new'));
+  if (first.name === 'song') SongPage.preload();
+  if (first.name === 'editor') Editor.preload();
 }
 
 /**
@@ -136,8 +155,5 @@ function App() {
   `;
 }
 
-// The embed player stands apart from the app: no session, no header, no
-// navigation, just the song in its frame.
-const embed = /^\/embed\/([0-9a-f-]+)$/.exec(location.pathname);
 if (embed) document.documentElement.classList.add('embedded');
 render(embed ? html`<${EmbedPage} id=${embed[1]} />` : html`<${App} />`, document.getElementById('app'));

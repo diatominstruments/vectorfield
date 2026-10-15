@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { watch } from 'node:fs';
 import * as esbuild from 'esbuild';
-import { clientBuild } from './build.js';
+import { clientBuild, cleanBuild } from './build.js';
 
 /**
  * `npm run dev`: rebuilds the client bundle on change (including edits to
@@ -11,6 +11,7 @@ import { clientBuild } from './build.js';
  */
 process.chdir(new URL('..', import.meta.url).pathname);   // runnable from anywhere
 
+await cleanBuild();
 const ctx = await esbuild.context(clientBuild);
 await ctx.watch();
 

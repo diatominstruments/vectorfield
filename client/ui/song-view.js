@@ -1,8 +1,7 @@
 import { useState } from 'preact/hooks';
-import { html, hue, useEngineEvent } from '../lib.js';
+import { html, hue, plural, useEngineEvent } from '../lib.js';
 import { LIMITS, newId, newBlock, copyBlock, removeBlock, playOrder } from '../../shared/song.js';
 
-export const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 export const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
 /**

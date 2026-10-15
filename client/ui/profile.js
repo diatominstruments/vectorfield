@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'preact/hooks';
-import { html, Link, navigate, useTitle } from '../lib.js';
+import { html, Link, navigate, plural, useTitle } from '../lib.js';
 import { api } from '../api.js';
 import { TAG_LIMITS } from '../../shared/genres.js';
 import { USER_LIMITS, usernameProblem } from '../../shared/users.js';
 import { GenrePicker, TagChips } from './genre-picker.js';
 import { SongCard } from './feed.js';
-import { plural } from './song-view.js';
 
 /**
  * A profile: who they are, what they're into, who follows them, and in two
