@@ -155,7 +155,8 @@ export function FireflyEditor({ store, engine, pattern, track }) {
     if (fly) removeFly(fly.id);
   };
 
-  const every = (rate) => `every ${beats(1 / rate)}`;
+  // As heard: the field's speed applies on top of each firefly's own rate.
+  const every = (rate) => `every ${beats(1 / (rate * config.speed))}`;
 
   return html`
     <div class="bounce-editor firefly-editor">
@@ -168,6 +169,9 @@ export function FireflyEditor({ store, engine, pattern, track }) {
       </div>
 
       <div class="bounce-controls panel">
+        <${Range} label="Speed" title="Speed every firefly up or slow them all down, keeping their rates in proportion"
+          min=${Math.log2(L.speed[0])} max=${Math.log2(L.speed[1])} step="0.05" value=${Math.log2(config.speed)}
+          format=${(v) => `${(2 ** v).toFixed(2)}×`} onInput=${(v) => set('speed')(Number((2 ** v).toFixed(3)))} />
         <${Range} label="Coupling" title="How hard a flash pulls the fireflies that see it towards flashing too" min="0" max="1" step="0.01" value=${config.coupling}
           format=${(v) => (v === 0 ? 'none' : `${Math.round(v * 100)}%`)} onInput=${set('coupling')} />
         <${Range} label="Reach" title="How far a flash is seen: small for separate clusters, large for the whole field" min=${L.reach[0]} max=${L.reach[1]} step="0.01" value=${config.reach}

@@ -9,11 +9,12 @@
  * a pattern and stored under that track's id (see song.js).
  *
  * Positions are in the unit square, and only distances matter: how far a
- * firefly's flash reaches. Rates are flashes per beat, so a tempo change
- * keeps the field in time with the song.
+ * firefly's flash reaches. Rates are flashes per beat before `speed` scales
+ * them, so a tempo change keeps the field in time with the song.
  *
  *   {
  *     flies: [{ id, x, y, note, rate }],
+ *     speed,      // multiplier on every firefly's rate
  *     coupling,   // 0 = each to its own … 1 = a flash pulls neighbours hard towards it
  *     reach,      // how far a flash is seen, in square-widths
  *     drift,      // 0 = steady rates … 1 = each cycle wobbles by up to ±15%
@@ -30,6 +31,7 @@ export const QUANTIZE = [0, 1, 2, 4];
 export const FIREFLY_LIMITS = Object.freeze({
   flies: 16,
   rate: [0.125, 4],
+  speed: [0.25, 4],
   reach: [0.05, 1.5],
   gate: [0.25, 8],
 });
@@ -51,6 +53,7 @@ export function defaultFireflies(keys = null) {
   const drumNotes = keys ? Object.keys(keys).map(Number) : null;
   return {
     flies: DEFAULT_FLIES.map((f, i) => ({ ...f, note: drumNotes ? drumNotes[i % drumNotes.length] : f.note })),
+    speed: 1,
     coupling: 0.3,
     reach: 0.5,
     drift: 0.2,
@@ -87,6 +90,7 @@ export function normalizeFireflies(f) {
 
   return {
     flies,
+    speed: num(f.speed, ...L.speed, fallback.speed),
     coupling: num(f.coupling, 0, 1, fallback.coupling),
     reach: num(f.reach, ...L.reach, fallback.reach),
     drift: num(f.drift, 0, 1, fallback.drift),

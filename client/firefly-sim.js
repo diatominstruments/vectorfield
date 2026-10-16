@@ -27,7 +27,7 @@ export class FireflySim {
   /**
    * Follow edits while it plays: new fireflies join at a random point in
    * their cycle, removed ones vanish, and everyone else carries on where
-   * they were with their new rate, place and reach.
+   * they were with their new rate, speed, place and reach.
    */
   sync(config) {
     this.config = config;
@@ -37,7 +37,7 @@ export class FireflySim {
       if (!this.flies.has(f.id)) this.flies.set(f.id, { id: f.id, phase: this.random(), pace: this.#pace() });
     }
     // Who sees whose flash, and how strongly: fading to nothing at the edge of reach.
-    this.rates = new Map(config.flies.map((f) => [f.id, f.rate]));
+    this.rates = new Map(config.flies.map((f) => [f.id, f.rate * config.speed]));
     this.seen = new Map(config.flies.map((f) => [f.id, []]));
     for (const a of config.flies) {
       for (const b of config.flies) {

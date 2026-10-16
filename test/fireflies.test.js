@@ -30,6 +30,17 @@ test('a firefly on its own flashes steadily at its rate', () => {
   [2, 4, 6].forEach((t, i) => assert.ok(near(times[i], t)));
 });
 
+test('speed scales every firefly\'s rate, and a change carries on from where they are', () => {
+  const sim = withPhases(config([fly('a', 0.3, 0.5), fly('b', 0.7, 1)], { speed: 2 }), { a: 0, b: 0 });
+  const times = (events, id) => events.filter((e) => e.id === id).map((e) => e.at);
+  const fast = sim.advance(2.1);
+  [1, 2].forEach((t, i) => assert.ok(near(times(fast, 'a')[i], t)));
+  [0.5, 1, 1.5, 2].forEach((t, i) => assert.ok(near(times(fast, 'b')[i], t)));
+  // a is a tenth of the way into its cycle; at half speed it flashes every 4 beats, so the rest takes 3.6.
+  sim.sync(config([fly('a', 0.3, 0.5)], { speed: 0.5 }));
+  assert.ok(near(sim.advance(4).find((e) => e.id === 'a').at, 3.6));
+});
+
 test('a flash sets off a nearly-ready neighbour in the same instant', () => {
   const sim = withPhases(config([fly('a', 0.4), fly('b', 0.5)], { coupling: 1, reach: 0.5 }), { a: 0.99, b: 0.8 });
   const [first, second] = sim.advance(0.05);
@@ -83,12 +94,13 @@ test('firefly settings are validated and clamped', () => {
   assert.deepEqual(normalizeFireflies({}), defaultFireflies());
   const clean = normalizeFireflies({
     flies: [{ id: 'a', x: 5, y: -5, note: -3, rate: 99 }, { id: 'a' }, { id: 'B' }, 'fly'],
-    coupling: 2, reach: 0, drift: -1, restart: 'yes', gate: 99, quantize: 3,
+    speed: 99, coupling: 2, reach: 0, drift: -1, restart: 'yes', gate: 99, quantize: 3,
   });
   assert.equal(clean.flies.length, 1);
   assert.equal(clean.flies[0].note, 0);
   assert.equal(clean.flies[0].rate, FIREFLY_LIMITS.rate[1]);
   assert.ok(clean.flies[0].x < 1 && clean.flies[0].y > 0);
+  assert.equal(clean.speed, FIREFLY_LIMITS.speed[1]);
   assert.equal(clean.coupling, 1);
   assert.equal(clean.reach, FIREFLY_LIMITS.reach[0]);
   assert.equal(clean.drift, 0);
