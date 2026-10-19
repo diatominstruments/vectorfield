@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  defaultSong, normalizeSong, blockTimes, stylesInEffect, visualsInEffect, newBlock, newVisual, copyBlock, removeBlock,
+  defaultSong, normalizeSong, blockTimes, stylesInEffect, transitionsInEffect, visualsInEffect, newBlock, newVisual, copyBlock, removeBlock,
   nextBlock, playOrder, sections, automationValue, newEffect, newTrack, pruneAutomation, inapplicableParams, LIMITS, SongError,
 } from '../shared/song.js';
 import { registry } from 'gloaming-instruments';
@@ -107,6 +107,79 @@ test('visuals: every kit trigger can drive a slot', () => {
   assert.deepEqual(clean.visuals[0].bind, block.visuals[0].bind);
 });
 
+test('visuals: signals that move on their own, and the newer combiners and modifiers', () => {
+  const song = sampleSong();
+  const [block] = song.arrangement;
+  const bind = {
+    a: { relative: 'rms', smooth: 1 },
+    b: { intensity: 'mid', invert: true, offset: 0.2, quantize: 4 },
+    c: { lfo: 0.05, shape: 'triangle', phase: 0.25 },
+    d: { progress: true, quantize: 4 },
+    e: { hold: 'snare', pick: 'cycle', steps: 3, smooth: 2 },
+    f: { hold: 'lull', pick: { relative: 'treble' }, initial: 0.5 },
+    g: { min: ['bass', { trigger: 'snare', decay: 2 }] },
+    h: { mul: [{ relative: 'treble' }, { intensity: 'bass', curve: 2 }], clamp: true },
+  };
+  block.visuals[0].bind = structuredClone(bind);
+  assert.deepEqual(normalizeSong(song).arrangement[0].visuals[0].bind, bind);
+
+  block.visuals[0].bind = { a: { lfo: 500, shape: 'wobble', quantize: -3 } };
+  assert.deepEqual(normalizeSong(song).arrangement[0].visuals[0].bind, { a: { lfo: 20, quantize: 0 } });
+
+  for (const bad of [
+    { relative: 'kick' }, { hold: 'kick' }, { hold: 'snare', pick: 'sometimes' }, { lfo: 'fast' }, { progress: 'yes' },
+    { mul: new Array(20).fill('mid') },
+  ]) {
+    block.visuals[0].bind = { swell: bad };
+    assert.throws(() => normalizeSong(song), SongError);
+  }
+});
+
+test('visuals: placement, blending, opacity, colours and transitions are kept, bounded', () => {
+  const song = sampleSong();
+  const [block] = song.arrangement;
+  Object.assign(block.visuals[0], {
+    place: { x: 0.5, y: 0, w: 0.5, h: 9, rotate: 400, flip: 'x', zoom: 2 },
+    clip: 'circle',
+    blend: 'screen',
+    opacity: { relative: 'bass', clamp: true },
+    style: { lineColor: '#FFB347', fontFamily: 'Comic Sans' },
+    transition: 'wipe-left',
+    fade: 30,
+  });
+  const clean = normalizeSong(song).arrangement[0].visuals[0];
+  assert.deepEqual(clean.place, { x: 0.5, w: 0.5, h: 2, rotate: 180, flip: 'x' });
+  assert.equal(clean.clip, 'circle');
+  assert.equal(clean.blend, 'screen');
+  assert.deepEqual(clean.opacity, { relative: 'bass', clamp: true });
+  assert.deepEqual(clean.style, { lineColor: '#ffb347' });
+  assert.equal(clean.transition, 'wipe-left');
+  assert.equal(clean.fade, 10);
+
+  // Unknown names and settings that change nothing are left out entirely.
+  Object.assign(block.visuals[0], {
+    place: { x: 0, w: 1, flip: 'diagonal' }, clip: 'star', blend: 'source-over', opacity: 1, style: {}, transition: 'dissolve', fade: 'slow',
+  });
+  assert.deepEqual(Object.keys(normalizeSong(song).arrangement[0].visuals[0]), ['id', 'viz', 'bind', 'options']);
+
+  block.visuals[0].opacity = 0.4;
+  assert.equal(normalizeSong(song).arrangement[0].visuals[0].opacity, 0.4);
+  block.visuals[0].opacity = { eval: '1' };
+  assert.throws(() => normalizeSong(song), SongError);
+});
+
+test('visuals: longer text options and more of them, for the kit\'s richer visualizations', () => {
+  const song = sampleSong();
+  const [block] = song.arrangement;
+  const ratios = '1:2,2:3,3:4,3:5,4:5,5:6,1:2:3,2:3:4:5';
+  block.visuals[0].options = { ratios, ...Object.fromEntries('abcdefghijklmnop'.split('').map((k, i) => [k, i])) };
+  const clean = normalizeSong(song).arrangement[0].visuals[0];
+  assert.equal(clean.options.ratios, ratios);
+  assert.equal(Object.keys(clean.options).length, 17);
+  block.visuals[0].options = { text: 'x'.repeat(121) };
+  assert.deepEqual(normalizeSong(song).arrangement[0].visuals[0].options, {});
+});
+
 test('the look: peak colour is a colour or off, its knee clamped', () => {
   const song = sampleSong();
   delete song.look.peakColor;
@@ -143,6 +216,28 @@ test('blocks without visuals continue the previous visuals', () => {
   assert.deepEqual(inEffect.map((e) => e.source), [-1, 1, 1, 1, 4]);
   assert.equal(inEffect[3].visuals[0], road);
   assert.deepEqual(inEffect[0].visuals, []);
+});
+
+test('block transitions carry on until a later block changes them', () => {
+  const song = sampleSong();
+  const pid = song.patterns[0].id;
+  song.arrangement = [newBlock(pid), newBlock(pid), newBlock(pid), newBlock(pid)];
+  Object.assign(song.arrangement[1], { transition: 'wipe-left', fade: 1.2 });
+  Object.assign(song.arrangement[3], { transition: 'iris' });
+  assert.deepEqual(transitionsInEffect(song), [
+    { transition: null, fade: null },
+    { transition: 'wipe-left', fade: 1.2 },
+    { transition: 'wipe-left', fade: 1.2 },
+    { transition: 'iris', fade: 1.2 },
+  ]);
+
+  song.arrangement[2].transition = 'dissolve';
+  song.arrangement[2].fade = -1;
+  const clean = normalizeSong(song).arrangement;
+  assert.equal(clean[2].transition, null);
+  assert.equal(clean[2].fade, 0);
+  delete song.arrangement[0].transition;   // saved before blocks had transitions
+  assert.equal(normalizeSong(song).arrangement[0].transition, null);
 });
 
 test('block style changes carry on until a later block changes them', () => {

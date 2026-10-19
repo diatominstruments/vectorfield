@@ -5,26 +5,57 @@
  *   look:  the song's base style — { background, lineColor, accentColor,
  *          peakColor, peakAbove, lineWidth, shadowBlur }
  *   each arrangement block may carry
- *     visuals: [{ id, viz, bind, options }]   kit timeline entries
+ *     visuals: [{ id, viz, bind, options,      kit timeline entries
+ *                 place?, clip?, blend?, opacity?, style?, transition?, fade? }]
  *     style:   partial look, overriding the song's from that block on,
  *              until a later block changes the same setting
+ *     transition, fade: how visuals come and go, also carried on from
+ *              that block until a later block changes it (null: unset)
  *
  * `bind` maps a visualization's input slots to signal specs, in the kit's
  * own closed spec language (see gloaming-kit src/signals.js). Visualization
  * ids and slot names aren't checked against the kit here; the kit ignores
  * ones it doesn't know, with a warning.
+ *
+ * The optional entry fields are the kit's `universal` ones (gloaming-kit
+ * src/placement.js): a region of the canvas, a clip shape, a blend mode, an
+ * opacity (a number or a signal spec), a style of the entry's own over the
+ * block's, and a transition and fade length that win over the block's.
+ * They're left out of a visual entirely while unset.
  */
 
 import { SongError } from './errors.js';
 
-// Mirrors of the kit's BANDS and DEFAULT_TRIGGERS names. The editor reads
-// the real ones from the kit; these only bound what a saved song may name.
+// Mirrors of the kit's BANDS, DEFAULT_TRIGGERS, CLIPS, BLENDS and
+// TRANSITIONS. The editor reads the real ones from the kit; these only
+// bound what a saved song may name.
 export const BAND_NAMES = ['subBass', 'bass', 'lowMid', 'mid', 'highMid', 'treble'];
 export const TRIGGER_NAMES = ['sub', 'bass', 'tom', 'snare', 'clap', 'hihat', 'onset', 'loud', 'lull'];
+export const CLIP_NAMES = ['rect', 'circle', 'ellipse', 'left', 'right', 'top', 'bottom', 'none'];
+export const BLEND_NAMES = [
+  'source-over', 'source-in', 'source-out', 'source-atop',
+  'destination-over', 'destination-in', 'destination-out', 'destination-atop',
+  'lighter', 'copy', 'xor', 'multiply', 'screen', 'overlay', 'darken', 'lighten',
+  'color-dodge', 'color-burn', 'hard-light', 'soft-light', 'difference', 'exclusion',
+  'hue', 'saturation', 'color', 'luminosity',
+];
+export const TRANSITION_NAMES = ['fade', 'cut', 'wipe-left', 'wipe-right', 'wipe-up', 'wipe-down', 'iris'];
+// The kit's lfo shapes and hold picks, which aren't exported.
+export const LFO_SHAPES = ['sine', 'triangle', 'saw', 'square'];
+export const HOLD_PICKS = ['random', 'impact', 'cycle', 'toggle'];
 
 export const VISUAL_LIMITS = Object.freeze({
-  perBlock: 6, bindSlots: 16, options: 8, specDepth: 4, specParts: 8, gridSize: 32,
+  perBlock: 6, bindSlots: 16, options: 24, optionLength: 120, specDepth: 4, specParts: 8, gridSize: 32,
 });
+
+/** A placed region: fractions of the canvas, degrees, and a flip. Unset fields are the whole canvas. */
+export const PLACE_DEFAULTS = Object.freeze({ x: 0, y: 0, w: 1, h: 1, rotate: 0, flip: 'none' });
+const PLACE_RANGES = { x: [-1, 2], y: [-1, 2], w: [0.01, 2], h: [0.01, 2], rotate: [-180, 180] };
+const FLIPS = ['x', 'y', 'xy'];
+
+/** Seconds a transition takes when nothing sets it (the kit's own default), and the most it may. */
+export const DEFAULT_FADE = 0.6;
+export const MAX_FADE = 10;
 
 // 'color' is #rrggbb; 'color?' may also be null, which for peakColor means
 // off (the kit draws no third colour). Numbers are [min, max, step].
@@ -70,7 +101,15 @@ export function normalizeStyle(style, { complete = false } = {}) {
   return Object.keys(out).length ? out : null;
 }
 
-const MODIFIERS = { smooth: [0, 5], curve: [0.1, 8], gain: [-10, 10], decay: [0.1, 50] };
+// Numeric keys a spec object may carry, bounded. `decay` shapes a trigger
+// envelope; `rate`-like keys belong to their source but are bounded here too.
+const MODIFIERS = {
+  smooth: [0, 5], curve: [0.1, 8], gain: [-10, 10], offset: [-10, 10], quantize: [0, 64], decay: [0.1, 50],
+  phase: [0, 1], seed: [0, 9999], steps: [2, 64], initial: [-10, 10],
+};
+const COMBINERS = ['sum', 'max', 'min', 'mul'];
+const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
+const isLevelName = (x) => x === 'rms' || BAND_NAMES.includes(x);
 
 /** A level or event spec, in the kit's closed language. Throws on anything else. */
 export function normalizeSpec(spec, depth = 0) {
@@ -80,7 +119,7 @@ export function normalizeSpec(spec, depth = 0) {
     return clampNum(spec, -10, 10);
   }
   if (typeof spec === 'string') {
-    if (spec === 'rms' || BAND_NAMES.includes(spec) || TRIGGER_NAMES.includes(spec)) return spec;
+    if (isLevelName(spec) || TRIGGER_NAMES.includes(spec)) return spec;
     throw new SongError(`unknown signal '${spec.slice(0, 20)}'`);
   }
   if (Array.isArray(spec)) {
@@ -90,19 +129,32 @@ export function normalizeSpec(spec, depth = 0) {
   if (!isObj(spec)) throw new SongError('bad signal spec');
 
   const out = {};
+  const combiner = COMBINERS.find((key) => Array.isArray(spec[key]));
   if (typeof spec.band === 'string' && BAND_NAMES.includes(spec.band)) out.band = spec.band;
+  else if (isLevelName(spec.relative)) out.relative = spec.relative;
+  else if (isLevelName(spec.intensity)) out.intensity = spec.intensity;
   else if (typeof spec.trigger === 'string' && TRIGGER_NAMES.includes(spec.trigger)) out.trigger = spec.trigger;
-  else if (typeof spec.const === 'number' && Number.isFinite(spec.const)) out.const = clampNum(spec.const, -10, 10);
-  else if (Array.isArray(spec.sum) || Array.isArray(spec.max)) {
-    const key = Array.isArray(spec.sum) ? 'sum' : 'max';
-    if (spec[key].length > VISUAL_LIMITS.specParts) throw new SongError('signal list too long');
-    out[key] = spec[key].map((s) => normalizeSpec(s, depth + 1));
+  else if (isNum(spec.const)) out.const = clampNum(spec.const, -10, 10);
+  else if (combiner) {
+    if (spec[combiner].length > VISUAL_LIMITS.specParts) throw new SongError('signal list too long');
+    out[combiner] = spec[combiner].map((s) => normalizeSpec(s, depth + 1));
+  } else if (isNum(spec.lfo)) {
+    out.lfo = clampNum(spec.lfo, 0, 20);
+    if (LFO_SHAPES.includes(spec.shape)) out.shape = spec.shape;
+  } else if (spec.progress === true) {
+    out.progress = true;
+  } else if (typeof spec.hold === 'string' && TRIGGER_NAMES.includes(spec.hold)) {
+    out.hold = spec.hold;
+    // A pick is one of the named ways, or a level spec read at the hit.
+    if (HOLD_PICKS.includes(spec.pick)) out.pick = spec.pick;
+    else if (spec.pick !== undefined) out.pick = normalizeSpec(spec.pick, depth + 1);
   } else {
     throw new SongError('signal spec has no source');
   }
   for (const [key, range] of Object.entries(MODIFIERS)) {
-    if (typeof spec[key] === 'number' && Number.isFinite(spec[key])) out[key] = clampNum(spec[key], ...range);
+    if (isNum(spec[key])) out[key] = clampNum(spec[key], ...range);
   }
+  if (spec.invert === true) out.invert = true;
   if (spec.clamp === true) out.clamp = true;
   return out;
 }
@@ -136,7 +188,7 @@ function normalizeVisual(v, newId) {
   if (optionEntries.length > VISUAL_LIMITS.options) throw new SongError('too many options');
   for (const [key, value] of optionEntries) {
     if (!KEY.test(key)) continue;
-    if (typeof value === 'string' && value.length <= 32) options[key] = value;
+    if (typeof value === 'string' && value.length <= VISUAL_LIMITS.optionLength) options[key] = value;
     else if (typeof value === 'number' && Number.isFinite(value)) options[key] = value;
     else if (typeof value === 'boolean') options[key] = value;
     else if (Array.isArray(value)) {
@@ -144,13 +196,46 @@ function normalizeVisual(v, newId) {
       if (grid) options[key] = grid;
     }
   }
-  return {
+  const out = {
     id: typeof v.id === 'string' && /^[a-z0-9]{1,24}$/.test(v.id) ? v.id : newId(),
     viz: v.viz,
     bind,
     options,
   };
+  const place = normalizePlace(v.place);
+  if (place) out.place = place;
+  if (CLIP_NAMES.includes(v.clip)) out.clip = v.clip;
+  if (BLEND_NAMES.includes(v.blend) && v.blend !== 'source-over') out.blend = v.blend;
+  if (isNum(v.opacity)) {
+    if (v.opacity < 1) out.opacity = clampNum(v.opacity, 0, 1);
+  } else if (v.opacity != null) {
+    out.opacity = normalizeSpec(v.opacity);
+  }
+  const style = normalizeStyle(v.style);
+  if (style) out.style = style;
+  const transition = normalizeTransition(v.transition);
+  if (transition) out.transition = transition;
+  const fade = normalizeFade(v.fade);
+  if (fade !== null) out.fade = fade;
+  return out;
 }
+
+/** A region of the canvas, keeping only what differs from the whole of it. Null when that's nothing. */
+export function normalizePlace(place) {
+  if (!isObj(place)) return null;
+  const out = {};
+  for (const [key, range] of Object.entries(PLACE_RANGES)) {
+    if (isNum(place[key]) && place[key] !== PLACE_DEFAULTS[key]) out[key] = clampNum(place[key], ...range);
+  }
+  if (FLIPS.includes(place.flip)) out.flip = place.flip;
+  return Object.keys(out).length ? out : null;
+}
+
+/** A transition name the kit knows, or null. */
+export const normalizeTransition = (t) => (TRANSITION_NAMES.includes(t) ? t : null);
+
+/** A transition's length in seconds, or null. */
+export const normalizeFade = (f) => (isNum(f) ? clampNum(f, 0, MAX_FADE) : null);
 
 export function normalizeVisuals(list, newId) {
   if (list == null) return [];

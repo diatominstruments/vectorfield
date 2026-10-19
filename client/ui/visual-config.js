@@ -1,8 +1,10 @@
-import { BANDS, DEFAULT_TRIGGERS, Glyph, catalog, describe } from 'gloaming-kit';
+import { BANDS, BLENDS, CLIPS, DEFAULT_TRIGGERS, Glyph, TRANSITIONS, catalog, describe } from 'gloaming-kit';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { html } from '../lib.js';
 import { NO_3D_HINT, needs3D } from '../three.js';
-import { STYLE_KEYS, DEFAULT_LOOK } from '../../shared/visuals.js';
+import {
+  STYLE_KEYS, DEFAULT_LOOK, DEFAULT_FADE, HOLD_PICKS, LFO_SHAPES, MAX_FADE, PLACE_DEFAULTS, VISUAL_LIMITS, normalizePlace,
+} from '../../shared/visuals.js';
 
 // ---- names -------------------------------------------------------------------
 
@@ -25,104 +27,265 @@ const STYLE_LABELS = {
   peakAbove: 'Peak above', lineWidth: 'Line width', shadowBlur: 'Glow',
 };
 
+const TRANSITION_LABELS = {
+  fade: 'Fade', cut: 'Cut', 'wipe-left': 'Wipe left', 'wipe-right': 'Wipe right', 'wipe-up': 'Wipe up',
+  'wipe-down': 'Wipe down', iris: 'Iris',
+};
+const transitionLabel = (t) => TRANSITION_LABELS[t] ?? t;
+
+const CLIP_LABELS = {
+  rect: 'Rectangle', circle: 'Circle', ellipse: 'Ellipse', left: 'Left half', right: 'Right half',
+  top: 'Top half', bottom: 'Bottom half', none: 'None',
+};
+
+// The kit's blend modes by what they do to what's beneath; any it adds
+// later land in "Other".
+const BLEND_GROUPS = [
+  ['Lighten', ['lighter', 'screen', 'lighten', 'color-dodge']],
+  ['Darken', ['multiply', 'darken', 'color-burn']],
+  ['Contrast', ['overlay', 'soft-light', 'hard-light']],
+  ['Invert', ['difference', 'exclusion']],
+  ['Colour', ['hue', 'saturation', 'color', 'luminosity']],
+  ['Mask', ['source-atop', 'source-in', 'source-out', 'destination-over', 'destination-in', 'destination-out', 'destination-atop', 'xor', 'copy']],
+];
+const BLEND_LABELS = { lighter: 'Add', 'destination-out': 'Knock out', 'destination-over': 'Behind' };
+const blendLabel = (b) => BLEND_LABELS[b] ? `${BLEND_LABELS[b]} (${b})` : b;
+
 /** The peak colour a look starts from when it's switched on. */
 const PEAK_ON = '#ffffff';
 
 /** A number shown to the precision its slider steps in: 28, 1.4, 0.028. */
-const fmt = (value, step) => Number(value).toFixed(step >= 1 ? 0 : Math.min(3, Math.ceil(-Math.log10(step) - 1e-9)));
+const fmt = (value, step) => Number(value).toFixed(step >= 1 ? 0 : Math.min(4, Math.ceil(-Math.log10(step) - 1e-9)));
 
 // ---- level specs ↔ form ----------------------------------------------------------
 //
 // The kit's spec language can express more than these controls do (sums,
-// maxes, curves). Anything the form can't represent shows as "Custom" and
+// maxes, products). Anything the form can't represent shows as "Custom" and
 // is left untouched unless the user picks something else.
 
+const MEASURES = { level: 'Level', relative: 'Relative', intensity: 'Sustained' };
+const MEASURE_HINTS = {
+  level: 'How loud it is right now',
+  relative: 'Against its own recent quiet and peaks, so it moves as much in a quiet passage as a loud one',
+  intensity: 'Slow, absolute loudness: big in loud passages, small in quiet ones',
+};
+const RESPONSES = { envelope: 'Envelope', hold: 'Hold per hit' };
+const RESPONSE_HINTS = {
+  envelope: 'Jumps on each hit, then decays',
+  hold: 'Each hit picks a new value, held until the next',
+};
+const PICKS = { random: 'Random', impact: 'Hit strength', cycle: 'Steps in turn', toggle: 'On, off' };
+const SHAPES = { sine: 'Sine', triangle: 'Triangle', saw: 'Saw', square: 'Square' };
+const MODIFIERS = ['invert', 'smooth', 'curve', 'gain', 'offset', 'quantize', 'clamp'];
+
+const modsOf = (spec) => ({
+  invert: Boolean(spec.invert), smooth: spec.smooth ?? 0, curve: spec.curve ?? 1, gain: spec.gain ?? 1,
+  offset: spec.offset ?? 0, quantize: spec.quantize ?? 0, clamp: Boolean(spec.clamp),
+});
+
 function readLevel(spec) {
-  if (typeof spec === 'string') {
-    if (spec === 'rms') return { source: 'rms' };
-    if (spec in BANDS) return { source: `band:${spec}` };
-  }
   if (typeof spec === 'number') return { source: 'const', value: spec };
-  if (spec && typeof spec === 'object' && !Array.isArray(spec)) {
-    const mods = { gain: spec.gain ?? 1, smooth: spec.smooth ?? 0 };
-    if (spec.band) return { source: `band:${spec.band}`, ...mods };
-    if (spec.trigger) return { source: `trigger:${spec.trigger}`, ...mods, decay: spec.decay ?? 3 };
-    if (spec.const !== undefined) return { source: 'const', value: spec.const };
-    if (Array.isArray(spec.sum) && spec.sum.length === 1 && spec.sum[0] === 'rms') return { source: 'rms', ...mods };
+  if (typeof spec === 'string') {
+    if (spec === 'rms') return { source: 'rms', measure: 'level' };
+    if (spec in BANDS) return { source: `band:${spec}`, measure: 'level' };
   }
-  return { source: 'custom' };
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return { source: 'custom' };
+
+  const level = (name, measure) => ({ source: name === 'rms' ? 'rms' : `band:${name}`, measure });
+  let form;
+  let own;   // the keys the form has a control for, besides the modifiers
+  if (spec.band !== undefined) [form, own] = [level(spec.band, 'level'), ['band']];
+  else if (spec.relative !== undefined) [form, own] = [level(spec.relative, 'relative'), ['relative']];
+  else if (spec.intensity !== undefined) [form, own] = [level(spec.intensity, 'intensity'), ['intensity']];
+  else if (spec.trigger !== undefined) {
+    [form, own] = [{ source: `trigger:${spec.trigger}`, response: 'envelope', decay: spec.decay ?? 3 }, ['trigger', 'decay']];
+  } else if (spec.hold !== undefined && (spec.pick === undefined || HOLD_PICKS.includes(spec.pick))) {
+    [form, own] = [{ source: `trigger:${spec.hold}`, response: 'hold', pick: spec.pick ?? 'random', steps: spec.steps ?? 4 }, ['hold', 'pick', 'steps']];
+  } else if (spec.lfo !== undefined) [form, own] = [{ source: 'lfo', rate: spec.lfo, shape: spec.shape ?? 'sine' }, ['lfo', 'shape']];
+  else if (spec.progress) [form, own] = [{ source: 'progress' }, ['progress']];
+  else if (spec.const !== undefined && Object.keys(spec).length === 1) return { source: 'const', value: spec.const };
+  else if (Array.isArray(spec.sum) && spec.sum.length === 1 && spec.sum[0] === 'rms') [form, own] = [level('rms', 'level'), ['sum']];
+  else return { source: 'custom' };
+  // A key the form can't show would be lost on the next edit, so the whole spec is custom instead.
+  if (Object.keys(spec).some((k) => !own.includes(k) && !MODIFIERS.includes(k))) return { source: 'custom' };
+  return { ...form, ...modsOf(spec) };
 }
 
 function writeLevel(form) {
   const [kind, name] = form.source.split(':');
-  if (kind === 'const') return { const: form.value ?? 0.5 };
-  const mods = {};
-  if (form.gain !== undefined && form.gain !== 1) mods.gain = form.gain;
-  if (form.smooth) mods.smooth = form.smooth;
-  if (kind === 'band') return { band: name, ...mods };
-  if (kind === 'trigger') return { trigger: name, decay: form.decay ?? 3, ...mods };
-  if (kind === 'rms') return Object.keys(mods).length ? { sum: ['rms'], ...mods } : 'rms';
-  return null;
+  if (kind === 'const') return form.value ?? 0.5;
+  let spec;
+  if (kind === 'band' || kind === 'rms') {
+    const measure = form.measure ?? 'level';
+    if (measure !== 'level') spec = { [measure]: kind === 'rms' ? 'rms' : name };
+    else spec = kind === 'rms' ? { sum: ['rms'] } : { band: name };
+  } else if (kind === 'trigger') {
+    if (form.response === 'hold') {
+      spec = { hold: name };
+      if (form.pick && form.pick !== 'random') spec.pick = form.pick;
+      if (form.pick === 'cycle') spec.steps = form.steps ?? 4;
+    } else {
+      spec = { trigger: name, decay: form.decay ?? 3 };
+    }
+  } else if (kind === 'lfo') {
+    spec = { lfo: form.rate ?? 0.1 };
+    if (form.shape && form.shape !== 'sine') spec.shape = form.shape;
+  } else if (kind === 'progress') {
+    spec = { progress: true };
+  } else {
+    return null;
+  }
+  // Modifiers, only where they change something.
+  if (form.invert) spec.invert = true;
+  if (form.smooth) spec.smooth = form.smooth;
+  if (form.curve !== undefined && form.curve !== 1) spec.curve = form.curve;
+  if (form.gain !== undefined && form.gain !== 1) spec.gain = form.gain;
+  if (form.offset) spec.offset = form.offset;
+  if (form.quantize) spec.quantize = form.quantize;
+  if (form.clamp) spec.clamp = true;
+  // Plain loudness is just its name.
+  return spec.sum && Object.keys(spec).length === 1 ? 'rms' : spec;
 }
 
-function describeLevel(spec) {
-  const { source } = readLevel(spec);
-  const [kind, name] = source.split(':');
-  if (kind === 'band') return bandLabel(name);
-  if (kind === 'trigger') return triggerLabel(name);
-  if (kind === 'rms') return 'Loudness';
-  if (kind === 'const') return 'Constant';
-  return 'Custom';
+/** The source a spec part reads, briefly: 'Treble', 'Snare', 'Song position'. */
+function sourceName(spec) {
+  if (typeof spec === 'number') return String(spec);
+  if (typeof spec === 'string') return spec === 'rms' ? 'Loudness' : spec in BANDS ? bandLabel(spec) : triggerLabel(spec).replace(/ hit$/, '');
+  if (Array.isArray(spec)) return describeSpec({ sum: spec });
+  if (!spec || typeof spec !== 'object') return 'Custom';
+  const name = spec.band ?? spec.relative ?? spec.intensity;
+  if (name !== undefined) return sourceName(name);
+  if (spec.trigger !== undefined || spec.hold !== undefined) return sourceName(spec.trigger ?? spec.hold);
+  if (spec.const !== undefined) return String(spec.const);
+  if (spec.lfo !== undefined) return 'Oscillator';
+  if (spec.progress) return 'Song position';
+  return describeSpec(spec);
+}
+
+/**
+ * A spec in a few words, for a slot's default and for custom specs:
+ * 'Mids, sustained', 'Loudness, relative', 'Mids + Snare + Clap'.
+ */
+function describeSpec(spec) {
+  if (spec && typeof spec === 'object' && !Array.isArray(spec)) {
+    if (spec.relative !== undefined) return `${sourceName(spec.relative)}, relative`;
+    if (spec.intensity !== undefined) return `${sourceName(spec.intensity)}, sustained`;
+    if (spec.hold !== undefined) return `${sourceName(spec.hold)}, held`;
+    if (spec.trigger !== undefined) return triggerLabel(spec.trigger);
+    const joins = { sum: ' + ', max: ' or ', min: ' and ', mul: ' × ' };
+    for (const [key, join] of Object.entries(joins)) {
+      if (Array.isArray(spec[key])) return [...new Set(spec[key].map(sourceName))].join(join);
+    }
+  }
+  if (Array.isArray(spec)) return describeSpec({ sum: spec });
+  return sourceName(spec);
 }
 
 const eventName = (spec) => (typeof spec === 'string' ? spec : spec?.trigger);
 
 // ---- controls ----------------------------------------------------------------
 
-function Slider({ label, min, max, step = 0.01, value, unit = '', onInput }) {
+function Slider({ label, min, max, step = 0.01, value, unit = '', format, disabled, onInput }) {
   return html`
     <label class="slider">
       <span>${label}</span>
-      <input type="range" min=${min} max=${max} step=${step} value=${value} onInput=${(e) => onInput(Number(e.target.value))} />
-      <output>${fmt(value, step)}${unit}</output>
+      <input type="range" min=${min} max=${max} step=${step} value=${value} disabled=${disabled}
+        onInput=${(e) => onInput(Number(e.target.value))} />
+      <output>${format ? format(value) : `${fmt(value, step)}${unit}`}</output>
     </label>`;
 }
 
-function LevelSlot({ slot, def, spec, onChange }) {
+function Choice({ label, value, options, titles, onChange }) {
+  return html`
+    <label class="slider">
+      <span>${label}</span>
+      <select value=${value} title=${titles?.[value]} onChange=${(e) => onChange(e.target.value)}>
+        ${Object.entries(options).map(([v, text]) => html`<option value=${v} title=${titles?.[v]}>${text}</option>`)}
+      </select>
+    </label>`;
+}
+
+function Toggle({ label, checked, title, onChange }) {
+  return html`
+    <label class="slider" title=${title}>
+      <span>${label}</span>
+      <input type="checkbox" checked=${checked} onChange=${(e) => onChange(e.target.checked)} />
+    </label>`;
+}
+
+/** The rarer shaping of a level, folded away until it's used. */
+function Shaping({ form, change }) {
+  const shaped = form.invert || form.curve !== 1 || form.offset || form.quantize || form.clamp;
+  const [open, setOpen] = useState(Boolean(shaped));
+  return html`
+    <details class="slot-more" open=${open} onToggle=${(e) => setOpen(e.currentTarget.open)}>
+      <summary>More shaping${shaped ? ' •' : ''}</summary>
+      <${Toggle} label="invert" checked=${form.invert} title="1 − the level, so quiet reads high" onChange=${(invert) => change({ invert })} />
+      <${Slider} label="curve" min="0.25" max="4" step="0.05" value=${form.curve} onInput=${(curve) => change({ curve })} />
+      <${Slider} label="offset" min="-1" max="1" value=${form.offset} onInput=${(offset) => change({ offset })} />
+      <${Slider} label="steps" min="0" max="16" step="1" value=${form.quantize}
+        format=${(q) => (q ? String(q) : 'off')} onInput=${(quantize) => change({ quantize })} />
+      <${Toggle} label="clamp" checked=${form.clamp} title="Keep the level between 0 and 1" onChange=${(clamp) => change({ clamp })} />
+    </details>`;
+}
+
+/** What a level slot reads from: a band, a hit, something that moves on its own, or a constant. */
+function LevelSlot({ slot, def, spec, defaultLabel, onChange }) {
   const bound = spec !== undefined;
   const form = bound ? readLevel(spec) : null;
+  const kind = form?.source.split(':')[0];
   const change = (patch) => onChange(writeLevel({ ...form, ...patch }));
 
+  // Moving between bands keeps the measure and shaping, and between hits the response.
+  const family = (source) => (source === 'rms' || source.startsWith('band:') ? 'sound' : source.split(':')[0]);
   const pick = (source) => {
     if (source === 'default') return onChange(undefined);
     if (source === 'custom') return;
-    onChange(writeLevel({ source }));
+    onChange(writeLevel(form && family(form.source) === family(source) ? { ...form, source } : { source }));
   };
+  const live = bound && !['const', 'custom'].includes(kind);
 
   return html`
     <div class="slot">
       <label class="slot-head">
         <span class="slot-name">${slot}</span>
         <select value=${bound ? form.source : 'default'} aria-label=${`${slot} source`} onChange=${(e) => pick(e.target.value)}>
-          <option value="default">Default (${describeLevel(def.default)})</option>
+          <option value="default">Default (${defaultLabel ?? describeSpec(def.default)})</option>
           <optgroup label="Frequency band">
             ${Object.keys(BANDS).map((b) => html`<option value=${`band:${b}`}>${bandLabel(b)}</option>`)}
           </optgroup>
           <option value="rms">Loudness</option>
-          <optgroup label="Hit envelope">
+          <optgroup label="Hits">
             ${TRIGGERS.map((t) => html`<option value=${`trigger:${t}`}>${triggerLabel(t)}</option>`)}
           </optgroup>
+          <optgroup label="Moves on its own">
+            <option value="lfo">Slow oscillator</option>
+            <option value="progress">Song position</option>
+          </optgroup>
           <option value="const">Constant</option>
-          ${bound && form.source === 'custom' && html`<option value="custom">Custom</option>`}
+          ${bound && kind === 'custom' && html`<option value="custom">Custom (${describeSpec(spec)})</option>`}
         </select>
       </label>
-      ${bound && form.source === 'const' && html`
+      ${(kind === 'band' || kind === 'rms') && html`
+        <${Choice} label="measure" value=${form.measure} options=${MEASURES} titles=${MEASURE_HINTS} onChange=${(measure) => change({ measure })} />`}
+      ${kind === 'trigger' && html`
+        <${Choice} label="response" value=${form.response} options=${RESPONSES} titles=${RESPONSE_HINTS} onChange=${(response) => change({ response })} />`}
+      ${kind === 'trigger' && form.response === 'envelope' && html`
+        <${Slider} label="decay" min="0.5" max="12" step="0.1" value=${form.decay} unit="/s" onInput=${(decay) => change({ decay })} />`}
+      ${kind === 'trigger' && form.response === 'hold' && html`
+        <${Choice} label="new value" value=${form.pick} options=${PICKS} onChange=${(p) => change({ pick: p })} />
+        ${form.pick === 'cycle' && html`
+          <${Slider} label="steps" min="2" max="12" step="1" value=${form.steps} onInput=${(steps) => change({ steps })} />`}`}
+      ${kind === 'lfo' && html`
+        <${Slider} label="rate" min="0.01" max="2" step="0.01" value=${form.rate} unit=" Hz" onInput=${(rate) => change({ rate })} />
+        <${Choice} label="shape" value=${form.shape} options=${SHAPES} onChange=${(shape) => change({ shape })} />`}
+      ${kind === 'const' && html`
         <${Slider} label="value" min="0" max="1" value=${form.value ?? 0.5} onInput=${(value) => change({ value })} />`}
-      ${bound && !['const', 'custom'].includes(form.source) && html`
-        <${Slider} label="gain" min="0" max="3" value=${form.gain ?? 1} onInput=${(gain) => change({ gain })} />
-        <${Slider} label="smooth" min="0" max="0.5" value=${form.smooth ?? 0} unit="s" onInput=${(smooth) => change({ smooth })} />`}
-      ${bound && form.source.startsWith('trigger:') && html`
-        <${Slider} label="decay" min="0.5" max="12" step="0.1" value=${form.decay ?? 3} unit="/s" onInput=${(decay) => change({ decay })} />`}
+      ${live && html`
+        <${Slider} label="gain" min="0" max="3" value=${form.gain} onInput=${(gain) => change({ gain })} />
+        <${Slider} label=${form.response === 'hold' ? 'glide' : 'smooth'} min="0" max="2" value=${form.smooth} unit="s"
+          onInput=${(smooth) => change({ smooth })} />
+        <${Shaping} form=${form} change=${change} />`}
     </div>`;
 }
 
@@ -266,12 +429,43 @@ function GlyphField({ name, def, value, onChange }) {
 }
 
 /**
+ * The `seed` every visualization takes: which roll of its random choices it
+ * makes. A number to type, or Reroll for a new one; the same seed with the
+ * same settings draws the same picture every time.
+ */
+function SeedField({ def, value, onChange }) {
+  const { min = 0, max = 9999 } = def;
+  const numeric = value !== undefined && Number.isFinite(Number(value));
+  const shown = numeric ? Number(value) : def.default ?? min;
+  const reroll = () => {
+    let next;
+    do next = min + Math.floor(Math.random() * (max - min + 1)); while (next === shown && max > min);
+    onChange(next);
+  };
+  const typed = (e) => {
+    if (e.target.value === '') return onChange('');
+    const n = Math.round(Number(e.target.value));
+    if (Number.isFinite(n)) onChange(Math.min(max, Math.max(min, n)));
+  };
+  return html`
+    <label class="field seed-field">
+      <span>seed</span>
+      <input type="number" min=${min} max=${max} step="1" value=${shown} onChange=${typed} />
+      <button class="ghost" title="Another roll of its random choices, with the same settings"
+        onClick=${(e) => { e.preventDefault(); reroll(); }}>Reroll</button>
+      <button class="ghost reset" disabled=${value === undefined} onClick=${(e) => { e.preventDefault(); onChange(''); }}
+        title="Use the default">↺</button>
+    </label>`;
+}
+
+/**
  * One declared option, as the kit describes it: an enum, a free-form
  * string or number, or a grid drawing. Clearing it (empty string) falls back to the
  * visualization's own default.
  */
 function OptionField({ name, def, value, onChange }) {
   if (def.kind === 'grid') return html`<${GlyphField} name=${name} def=${def} value=${value} onChange=${onChange} />`;
+  if (name === 'seed' && def.kind === 'number') return html`<${SeedField} def=${def} value=${value} onChange=${onChange} />`;
   if (def.kind === 'enum') {
     return html`
       <label class="field">
@@ -301,20 +495,140 @@ function OptionField({ name, def, value, onChange }) {
     return html`
       <label class="field">
         <span>${name}</span>
-        <input type="text" value=${value ?? ''} placeholder=${def.default ?? ''} maxLength=${Math.min(def.maxLength ?? 32, 32)}
+        <input type="text" value=${value ?? ''} placeholder=${def.default ?? ''}
+          maxLength=${Math.min(def.maxLength ?? 32, VISUAL_LIMITS.optionLength)}
           onInput=${(e) => onChange(e.target.value)} />
       </label>`;
   }
   return null;
 }
 
+// ---- entry fields: placement, blending, colours, transition ------------------
+
+/** The keys a visual has beyond its viz, bindings and options; see shared/visuals.js. */
+const ENTRY_KEYS = ['place', 'clip', 'blend', 'opacity', 'style', 'transition', 'fade'];
+
+/** Whether a visual has been changed from its visualization's defaults at all. */
+export const hasSettings = (v) => Object.keys(v.bind).length > 0 || Object.keys(v.options).length > 0
+  || ENTRY_KEYS.some((key) => v[key] !== undefined);
+
+/** A part of a panel that folds away, open to begin with when it holds settings. */
+function Section({ title, active, children }) {
+  const [open, setOpen] = useState(Boolean(active));
+  return html`
+    <details class="panel-section" open=${open} onToggle=${(e) => setOpen(e.currentTarget.open)}>
+      <summary><h4>${title}${active && html`<span class="set" title="Changed from the defaults"> •</span>`}</h4></summary>
+      ${children}
+    </details>`;
+}
+
+// Where on the canvas a visual can go in one click; sliders do the rest.
+const REGIONS = {
+  whole: ['Whole', {}],
+  left: ['Left', { w: 0.5 }],
+  right: ['Right', { x: 0.5, w: 0.5 }],
+  top: ['Top', { h: 0.5 }],
+  bottom: ['Bottom', { y: 0.5, h: 0.5 }],
+  centre: ['Centre', { x: 0.25, y: 0.25, w: 0.5, h: 0.5 }],
+};
+const FLIP_LABELS = { none: 'None', x: 'Left–right', y: 'Top–bottom', xy: 'Both' };
+
+/**
+ * Where a visual draws (a region of the canvas, turned and flipped), what
+ * shape it shows through, how it combines with what's beneath, and how
+ * much of it shows. Region, clip and blend make it a new instance, which
+ * crossfades in; opacity eases.
+ */
+function PlacementFields({ visual, set }) {
+  const place = { ...PLACE_DEFAULTS, ...visual.place };
+  const setPlace = (patch) => set('place', normalizePlace({ ...visual.place, ...patch }) ?? undefined);
+  const region = Object.keys(REGIONS).find((key) => ['x', 'y', 'w', 'h']
+    .every((k) => place[k] === (REGIONS[key][1][k] ?? PLACE_DEFAULTS[k])));
+
+  return html`
+    <div class="field">
+      <span>Region</span>
+      <div class="region-presets" role="group" aria-label="Region">
+        ${Object.entries(REGIONS).map(([key, [label, r]]) => html`
+          <button key=${key} class="ghost" aria-pressed=${region === key}
+            onClick=${() => setPlace({ x: 0, y: 0, w: 1, h: 1, ...r })}>${label}</button>`)}
+      </div>
+    </div>
+    <${Slider} label="left" min="0" max="1" value=${place.x} onInput=${(x) => setPlace({ x })} />
+    <${Slider} label="top" min="0" max="1" value=${place.y} onInput=${(y) => setPlace({ y })} />
+    <${Slider} label="width" min="0.05" max="1" value=${place.w} onInput=${(w) => setPlace({ w })} />
+    <${Slider} label="height" min="0.05" max="1" value=${place.h} onInput=${(h) => setPlace({ h })} />
+    <${Slider} label="rotate" min="-180" max="180" step="1" value=${place.rotate} unit="°" onInput=${(rotate) => setPlace({ rotate })} />
+    <${Choice} label="flip" value=${place.flip} options=${FLIP_LABELS} onChange=${(flip) => setPlace({ flip })} />
+
+    <label class="field">
+      <span>Clip</span>
+      <select value=${visual.clip ?? ''} onChange=${(e) => set('clip', e.target.value || undefined)}>
+        <option value="">Default (${visual.place ? 'rectangle' : 'none'})</option>
+        ${CLIPS.map((c) => html`<option value=${c}>${CLIP_LABELS[c] ?? c}</option>`)}
+      </select>
+    </label>
+    <label class="field">
+      <span>Blend</span>
+      <select value=${visual.blend ?? ''} onChange=${(e) => set('blend', e.target.value && e.target.value !== 'source-over' ? e.target.value : undefined)}>
+        <option value="">Normal</option>
+        ${BLEND_GROUPS.map(([label, modes]) => html`
+          <optgroup label=${label}>
+            ${modes.filter((b) => BLENDS.includes(b)).map((b) => html`<option value=${b}>${blendLabel(b)}</option>`)}
+          </optgroup>`)}
+        ${BLENDS.some((b) => b !== 'source-over' && !BLEND_GROUPS.some(([, modes]) => modes.includes(b))) && html`
+          <optgroup label="Other">
+            ${BLENDS.filter((b) => b !== 'source-over' && !BLEND_GROUPS.some(([, modes]) => modes.includes(b)))
+              .map((b) => html`<option value=${b}>${b}</option>`)}
+          </optgroup>`}
+      </select>
+    </label>
+    <${LevelSlot} slot="Opacity" def=${{ default: 1 }} defaultLabel="Full" spec=${visual.opacity}
+      onChange=${(spec) => set('opacity', spec === 1 ? undefined : spec)} />`;
+}
+
+/**
+ * How visuals come on and go off: a transition and how long it takes.
+ * `value` holds what this level sets; `inherited` what it falls back to.
+ * Shows what's in effect, with ↺ to go back to the fallback.
+ */
+function TransitionFields({ value, inherited, resetTitle, onChange }) {
+  const own = (key) => value[key] !== undefined && value[key] !== null;
+  const transition = own('transition') ? value.transition : inherited.transition ?? 'fade';
+  const fade = own('fade') ? value.fade : inherited.fade ?? DEFAULT_FADE;
+  const reset = (key) => html`
+    <button class="ghost reset" disabled=${!own(key)} title=${resetTitle}
+      onClick=${(e) => { e.preventDefault(); onChange(key, undefined); }}>↺</button>`;
+  return html`
+    <label class=${`field ${own('transition') ? 'overridden' : ''}`}>
+      <span>Transition</span>
+      <select value=${transition} onChange=${(e) => onChange('transition', e.target.value)}>
+        ${TRANSITIONS.map((t) => html`<option value=${t}>${transitionLabel(t)}</option>`)}
+      </select>
+      <output></output>
+      ${reset('transition')}
+    </label>
+    <label class=${`field ${own('fade') ? 'overridden' : ''}`}>
+      <span>Length</span>
+      <input type="range" min="0" max=${MAX_FADE} step="0.05" value=${fade} disabled=${transition === 'cut'}
+        onInput=${(e) => onChange('fade', Number(e.target.value))} />
+      <output>${transition === 'cut' ? '—' : `${fmt(fade, 0.05)}s`}</output>
+      ${reset('fade')}
+    </label>`;
+}
+
 /**
  * Settings for one visualization instance: its type, what drives each of
- * its declared input slots, and its declared options. Generated from the
+ * its declared input slots, and its declared options, generated from the
  * kit's own description of the visualization, so kit additions need no
- * changes here.
+ * changes here; then the fields every visualization takes (the kit's
+ * `universal` ones): placement and blending, colours of its own, and how it
+ * comes and goes.
+ *
+ * `look` is the look in effect on the visual's block, which its own colours
+ * start from, and `transition` the block's transition in effect.
  */
-export function VisualPanel({ visual, blockLabel, onChange, onRemove, onMove, canMove }) {
+export function VisualPanel({ visual, blockLabel, look, transition, onChange, onRemove, onMove, canMove, onDuplicate, canDuplicate }) {
   const info = describe(visual.viz);
 
   const setBind = (slot, spec) => onChange((v) => {
@@ -325,9 +639,19 @@ export function VisualPanel({ visual, blockLabel, onChange, onRemove, onMove, ca
     if (value === '') delete v.options[key];
     else v.options[key] = value;
   });
+  const set = (key, value) => onChange((v) => {
+    if (value === undefined) delete v[key];
+    else v[key] = value;
+  });
+  const setStyle = (key, value) => onChange((v) => {
+    const style = { ...v.style };
+    if (value === undefined) delete style[key]; else style[key] = value;
+    if (Object.keys(style).length) v.style = style; else delete v.style;
+  });
 
   const inputs = info?.inputs ?? [];
   const options = info?.options ?? [];
+  const placed = ['place', 'clip', 'blend', 'opacity'].some((key) => visual[key] !== undefined);
 
   return html`
     <div class="panel visual-panel">
@@ -336,6 +660,8 @@ export function VisualPanel({ visual, blockLabel, onChange, onRemove, onMove, ca
         <div class="panel-actions">
           <button class="ghost" disabled=${!canMove.left} onClick=${() => onMove(-1)} aria-label="Move earlier (drawn below)">←</button>
           <button class="ghost" disabled=${!canMove.right} onClick=${() => onMove(1)} aria-label="Move later (drawn on top)">→</button>
+          <button class="ghost" disabled=${!canDuplicate} onClick=${onDuplicate}
+            title=${canDuplicate ? 'Another of this visual on the block, with the same settings: place the two apart' : `A block holds up to ${VISUAL_LIMITS.perBlock} visuals`}>Duplicate</button>
           <button class="ghost danger" onClick=${onRemove}>Remove</button>
         </div>
       </header>
@@ -369,14 +695,28 @@ export function VisualPanel({ visual, blockLabel, onChange, onRemove, onMove, ca
         <h4>Options</h4>
         ${options.map((def) => html`
           <${OptionField} key=${def.name} name=${def.name} def=${def} value=${visual.options[def.name]} onChange=${(v) => setOption(def.name, v)} />`)}`}
+
+      ${info && html`
+        <${Section} title="Placement and blending" active=${placed}>
+          <p class="hint muted">Where on the canvas it draws, through what shape, and how it mixes with the visuals beneath it.</p>
+          <${PlacementFields} visual=${visual} set=${set} />
+        <//>
+        <${Section} title="Colours" active=${visual.style !== undefined}>
+          <p class="hint muted">This visual's own colours, over the block's look. The page behind stays the block's background.</p>
+          <${LookFields} style=${visual.style} inherited=${look} resetTitle="Use the block's look" onChange=${setStyle} />
+        <//>
+        <${Section} title="Transition" active=${visual.transition !== undefined || visual.fade !== undefined}>
+          <p class="hint muted">How this visual comes on and goes off, in place of the block's transition.</p>
+          <${TransitionFields} value=${visual} inherited=${transition} resetTitle="Use the block's transition" onChange=${set} />
+        <//>`}
     </div>`;
 }
 
 /**
- * Style editor. For the song look, every key has a value. For a block, keys
- * inherit from the song look until changed; changed keys can be reset.
+ * The look's fields. For the song look, every key has a value. Elsewhere
+ * keys inherit from `inherited` until changed; changed keys can be reset.
  */
-export function LookPanel({ title, hint, style, inherited, onChange }) {
+function LookFields({ style, inherited, resetTitle, onChange }) {
   const isBlock = Boolean(inherited);
   // Not `??`: a null peakColor is a setting (off), not a missing one.
   const value = (key) => [style?.[key], inherited?.[key]].find((v) => v !== undefined) ?? DEFAULT_LOOK[key];
@@ -402,20 +742,38 @@ export function LookPanel({ title, hint, style, inherited, onChange }) {
     return fmt(v, rule[2]);
   };
 
+  return Object.entries(STYLE_KEYS).map(([key, rule]) => {
+    const overridden = isBlock && style?.[key] !== undefined;
+    return html`
+      <label class=${`field ${overridden ? 'overridden' : ''}`} key=${key}>
+        <span>${STYLE_LABELS[key]}</span>
+        ${control(key, rule)}
+        <output>${shown(key, rule)}</output>
+        ${isBlock && html`<button class="ghost reset" disabled=${!overridden} onClick=${(e) => { e.preventDefault(); onChange(key, undefined); }}
+          title=${resetTitle}>↺</button>`}
+      </label>`;
+  });
+}
+
+/**
+ * Style editor. For the song look, every key has a value. For a block, keys
+ * inherit from the song look until changed; changed keys can be reset.
+ */
+export function LookPanel({ title, hint, style, inherited, onChange }) {
   return html`
     <div class="panel look-panel">
       <header><h3>${title}</h3></header>
       ${hint && html`<p class="muted hint">${hint}</p>`}
-      ${Object.entries(STYLE_KEYS).map(([key, rule]) => {
-        const overridden = isBlock && style?.[key] !== undefined;
-        return html`
-          <label class=${`field ${overridden ? 'overridden' : ''}`} key=${key}>
-            <span>${STYLE_LABELS[key]}</span>
-            ${control(key, rule)}
-            <output>${shown(key, rule)}</output>
-            ${isBlock && html`<button class="ghost reset" disabled=${!overridden} onClick=${(e) => { e.preventDefault(); onChange(key, undefined); }}
-              title="Use the song look">↺</button>`}
-          </label>`;
-      })}
+      <${LookFields} style=${style} inherited=${inherited} resetTitle="Use the song look" onChange=${onChange} />
+    </div>`;
+}
+
+/** A block's transition, carried on from earlier blocks until changed, like its look. */
+export function TransitionPanel({ title, hint, value, inherited, onChange }) {
+  return html`
+    <div class="panel transition-panel">
+      <header><h3>${title}</h3></header>
+      ${hint && html`<p class="muted hint">${hint}</p>`}
+      <${TransitionFields} value=${value} inherited=${inherited} resetTitle="Use the transition from before this block" onChange=${onChange} />
     </div>`;
 }

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { catalog, describe } from 'gloaming-kit';
 import { html, hue, useEngineEvent } from '../lib.js';
-import { blockTimes, newId, newVisual, stylesInEffect, visualsInEffect } from '../../shared/song.js';
+import { blockTimes, newId, newVisual, stylesInEffect, transitionsInEffect, visualsInEffect } from '../../shared/song.js';
 import { VISUAL_LIMITS } from '../../shared/visuals.js';
-import { VisualPanel, LookPanel, vizLabel } from './visual-config.js';
+import { VisualPanel, LookPanel, TransitionPanel, hasSettings, vizLabel } from './visual-config.js';
 import { VisualCanvas, songTimeline } from './visual-canvas.js';
 import { fmtTime } from './song-view.js';
 import { NO_3D_HINT, has3D, needs3D } from '../three.js';
@@ -56,8 +56,11 @@ export function VisualsView({ store, engine }) {
   const times = blockTimes(doc);
   const inEffect = visualsInEffect(doc);
   const styles = stylesInEffect(doc);
+  const transitions = transitionsInEffect(doc);
   // The look a block starts from: the song look plus earlier blocks' changes.
   const lookBefore = (i) => ({ ...doc.look, ...(i > 0 ? styles[i - 1] : null) });
+  // Likewise its transition: what earlier blocks set, or nothing.
+  const transitionBefore = (i) => (i > 0 ? transitions[i - 1] : { transition: null, fade: null });
 
   const select = (sel, blockIndex) => {
     setSelection(sel);
@@ -110,30 +113,35 @@ export function VisualsView({ store, engine }) {
       from: `Block ${i + 1} · ${patterns.get(block.pattern).p.name}`,
       visuals: structuredClone(inEffect[i].visuals),
       look: { ...doc.look, ...styles[i] },
+      transition: transitions[i],
     };
     setCopied(clipboard);
     setLastPaste(null);
   };
 
-  // Replaces the block's visuals, and sets its look to only what differs
-  // from the look it starts from, so it shows the copied look exactly.
+  // Replaces the block's visuals, and sets its look and transition to only
+  // what differs from those it starts from, so it shows the copied ones exactly.
   const paste = (i) => {
     const block = doc.arrangement[i];
     const before = lookBefore(i);
     const style = Object.fromEntries(Object.entries(copied.look).filter(([key, v]) => v !== before[key]));
-    const undo = { blockId: block.id, visuals: structuredClone(block.visuals), style: block.style };
+    const { transition, fade } = copied.transition;
+    const was = transitionBefore(i);
+    const undo = { blockId: block.id, visuals: structuredClone(block.visuals), style: block.style, transition: block.transition, fade: block.fade };
     editBlock(block.id, (b) => {
       b.visuals = copied.visuals.map((v) => ({ ...structuredClone(v), id: newId() }));
       b.style = Object.keys(style).length ? style : null;
+      b.transition = transition !== was.transition ? transition : null;
+      b.fade = fade !== was.fade ? fade : null;
     });
     setLastPaste({ ...undo, at: store.editCount, label: `Block ${i + 1} · ${patterns.get(block.pattern).p.name}` });
     previewTime.current = times[i].start + 0.001;
   };
 
   const undoPaste = () => {
-    const { blockId, visuals, style } = lastPaste;
+    const { blockId, visuals, style, transition, fade } = lastPaste;
     setLastPaste(null);
-    editBlock(blockId, (b) => { b.visuals = visuals; b.style = style; });
+    editBlock(blockId, (b) => { Object.assign(b, { visuals, style, transition, fade }); });
   };
 
   const stopPasting = () => {
@@ -155,8 +163,15 @@ export function VisualsView({ store, engine }) {
   let panel;
   if (selVisual) {
     const vi = selBlock.visuals.indexOf(selVisual);
+    const duplicate = () => {
+      const copy = { ...structuredClone(selVisual), id: newId() };
+      editBlock(selBlock.id, (b) => { b.visuals.splice(vi + 1, 0, copy); });
+      select({ kind: 'visual', blockId: selBlock.id, visualId: copy.id }, selIndex);
+    };
     panel = html`<${VisualPanel} key=${selVisual.id} visual=${selVisual} blockLabel=${blockLabel}
+      look=${{ ...doc.look, ...styles[selIndex] }} transition=${transitions[selIndex]}
       canMove=${{ left: vi > 0, right: vi < selBlock.visuals.length - 1 }}
+      canDuplicate=${selBlock.visuals.length < VISUAL_LIMITS.perBlock} onDuplicate=${duplicate}
       onChange=${(fn) => editBlock(selBlock.id, (b) => fn(b.visuals.find((v) => v.id === selVisual.id)))}
       onMove=${(by) => editBlock(selBlock.id, (b) => { const [v] = b.visuals.splice(vi, 1); b.visuals.splice(vi + by, 0, v); })}
       onRemove=${() => { editBlock(selBlock.id, (b) => { b.visuals.splice(vi, 1); }); setSelection({ kind: 'block', blockId: selBlock.id }); }} />`;
@@ -167,7 +182,11 @@ export function VisualsView({ store, engine }) {
         const style = { ...b.style };
         if (value === undefined) delete style[key]; else style[key] = value;
         b.style = Object.keys(style).length ? style : null;
-      })} />`;
+      })} />
+      <${TransitionPanel} title="Transition" value=${{ transition: selBlock.transition, fade: selBlock.fade }}
+        inherited=${transitionBefore(selIndex)}
+        hint="How visuals come on and go off from this block on, until a later block changes it. Visuals arriving here use it, and so do visuals leaving when this block ends, so blocks that share one change along a single edge. A visual can set its own."
+        onChange=${(key, value) => editBlock(selBlock.id, (b) => { b[key] = value ?? null; })} />`;
   } else {
     panel = html`<${LookPanel} title="Song look" style=${doc.look}
       hint="The base colours for every block. Click a song block to change them for one section, or a visual to configure it."
@@ -225,8 +244,8 @@ export function VisualsView({ store, engine }) {
                   <li key=${block.id} class=${`${i === playingIndex ? 'now' : ''} ${isCopySource(block) ? 'copied-from' : ''}`} style=${`--hue: ${hue(pi)}; --length: ${p.length}`}>
                     <span class="bar" title="Start time">${fmtTime(times[i].start)}</span>
                     <button class=${`block ${blockSelected ? 'selected' : ''}`} onClick=${() => select({ kind: 'block', blockId: block.id }, i)}
-                      title=${block.style ? 'This block changes the colours and look. Click to edit them'
-                        : `Colours and look ${styles[i] ? 'carried on from an earlier block' : 'from the song look'}. Click to change them from this block on`}>
+                      title=${block.style ? 'This block changes the colours and look. Click to edit them, or its transition'
+                        : `Colours and look ${styles[i] ? 'carried on from an earlier block' : 'from the song look'}. Click to change them, or the transition, from this block on`}>
                       <span class="name">${p.name}</span>
                       <${LookChip} look=${look} own=${Boolean(block.style)} />
                     </button>
@@ -235,7 +254,7 @@ export function VisualsView({ store, engine }) {
                         <button key=${v.id}
                           class=${`viz-block ${selection.visualId === v.id ? 'selected' : ''} ${describe(v.viz) ? '' : 'missing'} ${browseIndex === i && browse.removed.includes(v.viz) ? 'removing' : ''}`}
                           onClick=${() => select({ kind: 'visual', blockId: block.id, visualId: v.id }, i)}>
-                          ${vizLabel(v.viz)}${Object.keys(v.bind).length || Object.keys(v.options).length ? html` <small>•</small>` : ''}
+                          ${vizLabel(v.viz)}${hasSettings(v) ? html` <small>•</small>` : ''}
                         </button>`)}
                       ${!block.visuals.length && inEffect[i].source >= 0 && inEffect[i].visuals.map((v) => html`
                         <button key=${v.id} class="viz-block continued"

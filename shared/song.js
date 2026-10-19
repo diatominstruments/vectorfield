@@ -1,6 +1,6 @@
 import { registry, sanitizeParams } from 'gloaming-instruments';
 import { SongError } from './errors.js';
-import { DEFAULT_LOOK, normalizeStyle, normalizeVisuals } from './visuals.js';
+import { DEFAULT_LOOK, normalizeFade, normalizeStyle, normalizeTransition, normalizeVisuals } from './visuals.js';
 import { normalizeBounce, defaultBounce } from './bounce.js';
 import { normalizeTubules, defaultTubules } from './tubules.js';
 import { normalizeAnts, defaultAnts } from './ants.js';
@@ -37,6 +37,7 @@ export { SongError };
  *                  automation: [{ id, track, effect?, param,
  *                                 points: [{ step, value }] }] }],
  *     arrangement: [{ id, pattern, visuals, style,     // blocks in play order
+ *                     transition, fade,
  *                     repeat, mute: [trackId], section,
  *                     follow: [{ to: blockId | null, weight }] }],
  *     loop: blockId | null,                            // where the song goes on from at its end
@@ -58,8 +59,9 @@ export { SongError };
  *
  * An arrangement block plays one pattern; the same pattern may appear in any
  * number of blocks. A block also carries the visualizations shown while it
- * plays and an optional style override, which carries on through later
- * blocks until one changes the same setting — see visuals.js.
+ * plays, an optional style override and an optional visual transition and
+ * fade length, each of which carries on through later blocks until one
+ * changes the same setting — see visuals.js.
  *
  * A block plays its pattern `repeat` times, silencing the tracks in its
  * `mute`. A `section` name starts a section that runs until the next block
@@ -199,7 +201,10 @@ export function automationValue(points, step) {
 }
 
 export function newBlock(patternId, visuals = []) {
-  return { id: newId(), pattern: patternId, visuals, style: null, repeat: 1, mute: [], section: null, follow: [] };
+  return {
+    id: newId(), pattern: patternId, visuals, style: null, transition: null, fade: null,
+    repeat: 1, mute: [], section: null, follow: [],
+  };
 }
 
 export function newVisual(vizId) {
@@ -300,6 +305,21 @@ export function stylesInEffect(song) {
   let current = null;
   return song.arrangement.map((block) => {
     if (block.style) current = { ...current, ...block.style };
+    return current;
+  });
+}
+
+/**
+ * How visuals come and go during each block: `{ transition, fade }`, each
+ * carried on from the last block that set it, or null where none has (the
+ * kit's own default, a 0.6 s fade). A block's visuals arrive with its
+ * transition, and visuals leave with the transition of the last block they
+ * were on screen for.
+ */
+export function transitionsInEffect(song) {
+  let current = { transition: null, fade: null };
+  return song.arrangement.map((block) => {
+    current = { transition: block.transition ?? current.transition, fade: block.fade ?? current.fade };
     return current;
   });
 }
@@ -537,6 +557,8 @@ export function normalizeSong(doc) {
         pattern: b.pattern,
         visuals: normalizeVisuals(b.visuals, newId),
         style: normalizeStyle(b.style),
+        transition: normalizeTransition(b.transition),
+        fade: normalizeFade(b.fade),
         repeat: int(b.repeat, 1, LIMITS.repeat, 1),
         mute: [...new Set(Array.isArray(b.mute) ? b.mute : [])].filter((t) => trackIds.has(t)),
         section: typeof b.section === 'string' && b.section.trim() ? b.section.trim().slice(0, LIMITS.sectionLength) : null,
