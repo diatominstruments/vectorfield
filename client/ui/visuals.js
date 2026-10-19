@@ -47,6 +47,11 @@ export function VisualsView({ store, engine }) {
   const [lastPaste, setLastPaste] = useState(null);
   const previewTime = useRef(0);
   const configRef = useRef();
+  // Side by side, the settings scroll on their own; something newly
+  // selected starts from the top of its panel, not where the last one was.
+  useEffect(() => {
+    if (configRef.current) configRef.current.scrollTop = 0;
+  }, [selection.kind, selection.blockId, selection.visualId]);
   const position = useEngineEvent(engine, 'position', engine.position);
   const playing = useEngineEvent(engine, 'state', engine.playing);
   const playingIndex = position && engine.cursor?.mode === 'song' ? position.index : -1;

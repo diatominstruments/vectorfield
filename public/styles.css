@@ -630,8 +630,18 @@ input[type=range].centered::-moz-range-progress { background: transparent; }
 .paste-viz { background: transparent; border-color: var(--accent); color: var(--accent); }
 .copied-tag { font-size: 12px; color: var(--accent); padding: 0 6px; }
 
-.visuals-config { position: sticky; top: 12px; display: grid; gap: 8px; }
-.visuals-config .config-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+/* Scrolls on its own, so the preview stays in view however long a visual's
+   settings run. Size containment keeps its contents from making the page
+   taller: it stretches to the preview and timeline beside it, up to the
+   window's height, and sticks there when a long timeline scrolls the page. */
+.visuals-config {
+  position: sticky; top: 12px; display: grid; gap: 8px; align-content: start;
+  align-self: stretch; contain: size; max-height: calc(100vh - 24px); overflow-y: auto;
+}
+.visuals-config .config-actions {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  position: sticky; top: 0; z-index: 1; background: var(--bg);
+}
 .visuals-config .back { padding-left: 0; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
 .panel header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
@@ -696,7 +706,7 @@ input[type=range].centered::-moz-range-progress { background: transparent; }
 
 @media (max-width: 900px) {
   .visuals { grid-template-columns: minmax(0, 1fr); }
-  .visuals-config { position: static; }
+  .visuals-config { position: static; align-self: auto; contain: none; max-height: none; overflow: visible; }
 }
 
 @media (max-width: 720px) {
