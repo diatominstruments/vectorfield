@@ -488,9 +488,9 @@ get-proto@^1.0.1:
   version "0.1.0"
   resolved "https://codeload.github.com/diatominstruments/gloaming-instruments/tar.gz/c9475c818b9d657fb0aa3c0fb3cf8aca52ff77b8"
 
-"gloaming-kit@github:diatominstruments/gloaming-kit#a3a6339ab4f88c4dabecbe2ed406ca51fbf7155f":
+"gloaming-kit@github:diatominstruments/gloaming-kit#285ca1f43b22d65acd0d7ecdb593a502ada7457a":
   version "0.1.0"
-  resolved "https://codeload.github.com/diatominstruments/gloaming-kit/tar.gz/a3a6339ab4f88c4dabecbe2ed406ca51fbf7155f"
+  resolved "https://codeload.github.com/diatominstruments/gloaming-kit/tar.gz/285ca1f43b22d65acd0d7ecdb593a502ada7457a"
 
 google-auth-library@^11.1.0:
   version "11.1.0"
