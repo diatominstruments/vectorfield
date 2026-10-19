@@ -16,7 +16,7 @@
     "compression": "^1.8.2",
     "express": "^5.2.1",
     "gloaming-instruments": "github:diatominstruments/gloaming-instruments#c9475c818b9d657fb0aa3c0fb3cf8aca52ff77b8",
-    "gloaming-kit": "github:diatominstruments/gloaming-kit#285ca1f43b22d65acd0d7ecdb593a502ada7457a",
+    "gloaming-kit": "github:diatominstruments/gloaming-kit#3d06a79ca73e52efc1cb85046d06d1bdd0d1a71d",
     "google-auth-library": "^11.1.0",
     "htm": "^3.1.1",
     "pg": "^8.23.0",
