@@ -19,8 +19,8 @@ export { SongError };
  *     bpm: 120,
  *     tracks: [{ id, name, gain, mute,
  *                instrument: { id, version, params },
- *                effects: [{ uid, id, version, params }, ...] }],
- *     mix: { effects: [{ uid, id, version, params }, ...] },   // on the whole song
+ *                effects: [{ uid, id, version, params, sidechain? }, ...] }],
+ *     mix: { effects: [{ uid, id, version, params, sidechain? }, ...] },   // on the whole song
  *     patterns: [{ id, name, length,
  *                  notes: { [trackId]: [{ step, note, velocity, length }] },
  *                  sequencers: { [trackId]: 'bounce' | 'tubules' | 'ants' | 'fireflies'
@@ -49,6 +49,11 @@ export { SongError };
  * the library adds is storable here without changes. An effect entry also
  * carries a `uid`, unique in its chain, so automation can name one effect
  * however the chain is reordered.
+ *
+ * An effect the library gives a sidechain (a compressor's key, a vocoder's
+ * carrier) may name, as `sidechain`, the track whose instrument feeds it,
+ * taken before that track's effects and volume. A track's own effects
+ * can't name the track itself.
  *
  * A pattern's automation lanes each sweep one number param of a track's
  * instrument, or with `effect` (a uid), of one of the track's effects,
@@ -388,15 +393,32 @@ function module(entry, kind) {
 }
 
 // Songs saved before effects had uids get fresh ones, as does a uid used
-// twice in one chain.
+// twice in one chain. A sidechain is kept as given here, and checked by
+// pruneSidechains once every track id is known.
 function effectChain(list, what) {
   const uids = new Set();
   return array(list, LIMITS.effectsPerTrack, what).map((e) => {
     const clean = module(e, 'effect');
     const uid = typeof e.uid === 'string' && ID.test(e.uid) && !uids.has(e.uid) ? e.uid : newId();
     uids.add(uid);
-    return { uid, ...clean };
+    return { uid, ...clean, ...(typeof e.sidechain === 'string' && { sidechain: e.sidechain }) };
   });
+}
+
+/**
+ * Drop sidechains that can't be heard: from a track that's gone, from the
+ * effect's own track, or on an effect without a sidechain. Mutates `doc`.
+ */
+export function pruneSidechains(doc) {
+  const trackIds = new Set(doc.tracks.map((t) => t.id));
+  const prune = (effects, own) => {
+    for (const e of effects) {
+      if (e.sidechain === undefined) continue;
+      if (!registry.get(e.id)?.sidechain || !trackIds.has(e.sidechain) || e.sidechain === own) delete e.sidechain;
+    }
+  };
+  for (const t of doc.tracks) prune(t.effects, t.id);
+  prune(doc.mix.effects, null);
 }
 
 // Each generative sequencer: where its settings live on a pattern, and how
@@ -519,6 +541,7 @@ export function normalizeSong(doc) {
   const trackIds = new Set(tracks.map((t) => t.id));
   const trackOf = new Map(tracks.map((t) => [t.id, t]));
   if (trackIds.size !== tracks.length) throw new SongError('duplicate track id');
+  pruneSidechains({ tracks, mix });
 
   const patterns = array(doc.patterns, LIMITS.patterns, 'patterns').map((p, i) => {
     if (!isObj(p)) throw new SongError('bad pattern');

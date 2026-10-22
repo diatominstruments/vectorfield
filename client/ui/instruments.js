@@ -3,7 +3,7 @@ import { registry, matches } from 'gloaming-instruments';
 import { html, hue } from '../lib.js';
 import {
   LIMITS, GENERATIVE_SEQUENCERS, instrumentTypes, effectTypes, moduleLabel, moduleEntry, newEffect, newTrack, pruneAutomation,
-  inapplicableParams,
+  pruneSidechains, inapplicableParams,
 } from '../../shared/song.js';
 import { ParamPanel, moduleInfo, instrumentKeys } from './params.js';
 import { ModulePicker } from './module-picker.js';
@@ -54,6 +54,7 @@ function TrackCard({ track, index, store, engine }) {
         for (const kind of GENERATIVE_SEQUENCERS) delete p[kind][track.id];
       }
       pruneAutomation(d);
+      pruneSidechains(d);
     });
   };
 
@@ -92,7 +93,7 @@ function TrackCard({ track, index, store, engine }) {
         <div class="summary">
           <${ParamPanel} module=${M} params=${track.instrument.params} compact onChange=${setInstrumentParams} />
           ${track.effects.length > 0 && html`
-            <span class="effects-summary muted">${track.effects.map((e) => `→ ${moduleLabel(registry.get(e.id))}`).join(' ')}</span>`}
+            <span class="effects-summary muted">${effectsSummary(track.effects, store.doc.tracks)}</span>`}
         </div>`}
 
       ${open && html`
@@ -101,7 +102,8 @@ function TrackCard({ track, index, store, engine }) {
             <${ModuleHeading} module=${M} params=${track.instrument.params} />
             <${ParamPanel} module=${M} params=${track.instrument.params} onChange=${setInstrumentParams} />
           </div>
-          <${EffectChain} effects=${track.effects} edit=${editEffects} automatedIn=${patternsAutomating} />
+          <${EffectChain} effects=${track.effects} edit=${editEffects} automatedIn=${patternsAutomating}
+            sources=${store.doc.tracks.filter((t) => t.id !== track.id)} />
         </div>`}
     </article>
   `;
@@ -122,25 +124,34 @@ function MixCard({ store }) {
         <button class="ghost disclosure" aria-expanded=${open} onClick=${() => setOpen(!open)}>${open ? '▾' : '▸'}</button>
         <h2>Main mix</h2>
         ${!open && html`<span class="effects-summary muted">
-          ${effects.length ? effects.map((e) => `→ ${moduleLabel(registry.get(e.id))}`).join(' ') : 'No effects'}
+          ${effects.length ? effectsSummary(effects, store.doc.tracks) : 'No effects'}
         </span>`}
       </header>
       ${open && html`
         <p class="hint muted">Effects here process the whole song, after every track.</p>
         <div class="chain">
-          <${EffectChain} effects=${effects} edit=${edit} />
+          <${EffectChain} effects=${effects} edit=${edit} sources=${store.doc.tracks} />
         </div>`}
     </article>
   `;
+}
+
+/** A chain in a line: '→ Compressor ⇠ Kick → Delay', each effect with the track on its sidechain. */
+function effectsSummary(effects, tracks) {
+  return effects.map((e) => {
+    const source = e.sidechain && tracks.find((t) => t.id === e.sidechain);
+    return `→ ${moduleLabel(registry.get(e.id))}${source ? ` ⇠ ${source.name}` : ''}`;
+  }).join(' ');
 }
 
 /**
  * A chain of effect cards with reorder and remove, plus an add button while
  * there's room. `edit(fn)` makes a store edit, passing fn the effects list;
  * `automatedIn(uid)`, where effects can be automated, counts the patterns
- * that automate one.
+ * that automate one. `sources` are the tracks an effect's sidechain can
+ * listen to.
  */
-function EffectChain({ effects, edit, automatedIn }) {
+function EffectChain({ effects, edit, automatedIn, sources }) {
   const move = (i, by) => edit((list) => {
     const [e] = list.splice(i, 1);
     list.splice(i + by, 0, e);
@@ -164,8 +175,15 @@ function EffectChain({ effects, edit, automatedIn }) {
               <button class="ghost danger" onClick=${() => remove(i)} aria-label="Remove effect">✕</button>
             </span>
           <//>
-          <${ParamPanel} module=${E} params=${effect.params}
-            onChange=${(values) => edit((list) => { Object.assign(list[i].params, values); })} />
+          <${ParamPanel} module=${E} params=${effect.params} after=${E.sidechain && sidechainSwitch(E)}
+            onChange=${(values) => edit((list) => { Object.assign(list[i].params, values); })}>
+            ${E.sidechain && html`
+              <${SidechainPicker} module=${E} effect=${effect} sources=${sources}
+                onChange=${(trackId) => edit((list) => {
+                  if (trackId) list[i].sidechain = trackId;
+                  else delete list[i].sidechain;
+                })} />`}
+          <//>
         </div>`;
     })}
     ${effects.length < LIMITS.effectsPerTrack && html`
@@ -173,6 +191,32 @@ function EffectChain({ effects, edit, automatedIn }) {
         <${ModulePicker} types=${effectTypes()} grouped label="+ Add effect"
           onPick=${(id) => edit((list) => { list.push(newEffect(id)); })} />
       </div>`}
+  `;
+}
+
+/** The param that turns an effect's sidechain on (a vocoder's carrier), so the picker can sit under it. */
+const sidechainSwitch = (E) => Object.keys(E.sidechain.activeWhen ?? {})[0];
+
+/**
+ * Which track an effect's sidechain listens to: its instrument, before its
+ * effects and volume. Dimmed, like a param, while the effect's settings
+ * leave the sidechain unheard.
+ */
+function SidechainPicker({ module: E, effect, sources, onChange }) {
+  const { label, description, activeWhen } = moduleInfo(E).sidechain;
+  const active = matches(activeWhen ?? true, effect.params);
+  const missing = active && !effect.sidechain;
+  const tip = [description, 'Hears the track\'s instrument, before its effects and volume.',
+    !active && 'Has no effect with the current settings.'].filter(Boolean).join(' ');
+  return html`
+    <div class=${`param choice sidechain ${active ? '' : 'inactive'}`} title=${tip}>
+      <span class="label">${label} from</span>
+      <select value=${effect.sidechain ?? ''} onChange=${(e) => onChange(e.target.value || null)} aria-label=${`${label} from`}>
+        <option value="">${sources.length ? 'No track' : 'No other tracks'}</option>
+        ${sources.map((t) => html`<option value=${t.id}>${t.name}</option>`)}
+      </select>
+      ${missing && html`<span class="hint muted">Pick a track to hear</span>`}
+    </div>
   `;
 }
 

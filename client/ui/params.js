@@ -1,5 +1,5 @@
 import { describe, matches, sanitizeParams } from 'gloaming-instruments';
-import { html } from '../lib.js';
+import { html, noteName } from '../lib.js';
 import { instrumentKeys, groupApplies } from '../../shared/song.js';
 
 /**
@@ -37,12 +37,20 @@ const num3 = (v) => {
   return a >= 100 ? v.toFixed(0) : a >= 10 ? v.toFixed(1) : v.toFixed(2);
 };
 
-/** A value for display: ms under a second, kHz over 1000 Hz, fractions as %, named marks by name. */
+/**
+ * A value for display: ms under a second, kHz over 1000 Hz, fractions as %,
+ * MIDI notes as names, named marks by name. Between marks, a range the marks
+ * name end to end (vowels, noise colours) shows the nearest; one with marks
+ * at just a few points (a lo-fi's 'Off') shows the number.
+ */
 export function formatValue(spec, v) {
   if (spec.type === 'choice') return spec.labels?.[v] ?? v;
   if (spec.marks?.length) {
-    const near = spec.marks.reduce((a, b) => (Math.abs(b.value - v) < Math.abs(a.value - v) ? b : a));
-    return Math.abs(near.value - v) < 0.05 ? near.label : `≈ ${near.label}`;
+    const at = (x) => toSlider(spec, x);
+    const near = spec.marks.reduce((a, b) => (Math.abs(at(b.value) - at(v)) < Math.abs(at(a.value) - at(v)) ? b : a));
+    if (Math.abs(at(near.value) - at(v)) < 0.01) return near.label;
+    const values = spec.marks.map((m) => m.value);
+    if (Math.min(...values) === spec.min && Math.max(...values) === spec.max) return `≈ ${near.label}`;
   }
   const sign = spec.center != null && v > spec.center ? '+' : '';
   switch (spec.unit) {
@@ -50,6 +58,12 @@ export function formatValue(spec, v) {
     case 'Hz': return v >= 1000 ? `${num3(v / 1000)} kHz` : `${num3(v)} Hz`;
     case '%': return `${Math.round(v * 100)}%`;
     case '×': return `×${num3(v)}`;
+    case ':1': return `${num3(v)}:1`;
+    case 'note': {
+      const n = Math.round(v);
+      const cents = Math.round((v - n) * 100);
+      return cents ? `${noteName(n)} ${cents > 0 ? '+' : ''}${cents} ct` : noteName(n);
+    }
     case undefined: return sign + num3(v);
     default: return `${sign}${num3(v)} ${spec.unit}`;
   }
@@ -86,8 +100,10 @@ function currentPreset(M, presets, params) {
  *
  * `onChange(values)` receives the params to change, as { name: value }.
  * `compact` shows just the module's primary params, for collapsed cards.
+ * Children (controls the app adds, like a sidechain's source) go right
+ * after the param named by `after`, or at the end without one.
  */
-export function ParamPanel({ module: M, params, onChange, compact = false }) {
+export function ParamPanel({ module: M, params, onChange, compact = false, after, children }) {
   const info = moduleInfo(M);
   const keys = instrumentKeys(M, params);
   const groups = moduleGroups(M, params);
@@ -130,8 +146,10 @@ export function ParamPanel({ module: M, params, onChange, compact = false }) {
           ${headings && html`<h4>${groupLabel(group, keys)}</h4>`}
           <${RoleGraph} group=${group} params=${params} />
           ${group.params.map((name) => html`
-            <${ParamRow} key=${name} name=${name} spec=${info.params[name]} params=${params} onChange=${onChange} />`)}
+            <${ParamRow} key=${name} name=${name} spec=${info.params[name]} params=${params} onChange=${onChange} />
+            ${name === after && children}`)}
         </section>`)}
+      ${!(after in info.params) && children}
     </div>
   `;
 }

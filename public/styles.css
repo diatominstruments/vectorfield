@@ -308,6 +308,7 @@ header.site img { width: 26px; height: 26px; border-radius: 50%; }
 .params .param:hover .label { color: var(--fg); }
 .params .preset { grid-template-columns: 80px minmax(0, 1fr); margin-bottom: 6px; }
 .params .param.inactive { opacity: 0.35; }
+.params .param.sidechain .hint { grid-column: 2; margin: 0 0 2px; font-size: 11px; }
 .params input[type=range] { width: 100%; min-width: 0; }
 .params output { text-align: right; color: var(--muted); font: 11px ui-monospace, Menlo, monospace; white-space: nowrap; }
 .params select { padding: 2px 4px; font-size: 12px; min-width: 0; }

@@ -28,7 +28,8 @@ const AUTOMATION_RESOLUTION = 4;   // automation values set per step
 /**
  * Engine — turns a song document into sound. Owns the AudioContext, one
  * live instrument → effects → gain chain per track, the main mix's effects
- * after them (master → mix effects → limiter), and a lookahead
+ * after them (master → mix effects → limiter), sidechains fed from each
+ * track's instrument (see #routeSidechains), and a lookahead
  * scheduler that plays one pattern on loop, one block of the arrangement on
  * loop, or the arrangement, and
  * sweeps params along the playing pattern's automation lanes.
@@ -45,8 +46,9 @@ export class Engine {
   constructor() {
     this.ctx = null;
     this.song = null;
-    this.live = new Map();   // track id -> { instrument, effects, gain, key }
+    this.live = new Map();   // track id -> { instrument, send, effects, gain, key }
     this.mix = { effects: [], key: '' };   // the main mix's live effects
+    this.sidechains = [];    // [from, to] node pairs connected by #routeSidechains
     this.listeners = new Map();
     this.playing = false;
     this.position = null;
@@ -120,6 +122,34 @@ export class Engine {
 
     if (effectsKey(song.mix) !== this.mix.key) this.#rewireMix(song.mix);
     song.mix.effects.forEach((e, i) => updateParams(this.mix.effects[i], e.params));
+    this.#routeSidechains(song);
+  }
+
+  // Each effect naming a sidechain hears that track's instrument, before
+  // its effects and volume, through the track's send. Connections are
+  // diffed by node, so a rebuilt instrument or effect gets fresh ones.
+  // Sends only ever feed sidechains, never anything a send hears, so no
+  // routing can make a loop.
+  #routeSidechains(song) {
+    const want = [];
+    const feed = (entry, effect) => {
+      const source = entry.sidechain && this.live.get(entry.sidechain);
+      if (source && effect?.sidechain) want.push([source.send, effect.sidechain]);
+    };
+    for (const track of song.tracks) {
+      const live = this.live.get(track.id);
+      track.effects.forEach((e, i) => feed(e, live?.effects[i]));
+    }
+    song.mix.effects.forEach((e, i) => feed(e, this.mix.effects[i]));
+
+    const has = (list, [from, to]) => list.some(([f, t]) => f === from && t === to);
+    for (const pair of this.sidechains) {
+      if (has(want, pair)) continue;
+      // Already gone if either end was torn down.
+      try { pair[0].disconnect(pair[1]); } catch {}
+    }
+    for (const pair of want) if (!has(this.sidechains, pair)) pair[0].connect(pair[1]);
+    this.sidechains = want;
   }
 
   #rewireMix(mix) {
@@ -134,7 +164,9 @@ export class Engine {
     const instrument = create(this.ctx, track.instrument);
     const gain = new GainNode(this.ctx, { gain: track.mute ? 0 : track.gain });
     gain.connect(this.master);
-    const live = { instrument, effects: [], gain, key: null };
+    // What other effects' sidechains hear of this track.
+    const send = new GainNode(this.ctx);
+    const live = { instrument, send, effects: [], gain, key: null };
     this.#rewireEffects(live, track);
     return live;
   }
@@ -144,6 +176,7 @@ export class Engine {
     live.effects.forEach((e) => e.dispose());
     live.effects = track.effects.map((e) => create(this.ctx, e));
     chain(live.instrument, ...live.effects, live.gain);
+    live.instrument.output.connect(live.send);
     live.key = effectsKey(track);
   }
 
@@ -152,6 +185,7 @@ export class Engine {
     live.instrument.dispose();
     live.effects.forEach((e) => e.dispose());
     live.gain.disconnect();
+    live.send.disconnect();
   }
 
   // ---- playback --------------------------------------------------------------
@@ -735,6 +769,7 @@ export class Engine {
     this.ctx = null;
     this.live.clear();
     this.mix = { effects: [], key: '' };
+    this.sidechains = [];
   }
 }
 

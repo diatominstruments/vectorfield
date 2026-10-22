@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   defaultSong, normalizeSong, blockTimes, stylesInEffect, transitionsInEffect, visualsInEffect, newBlock, newVisual, copyBlock, removeBlock,
-  nextBlock, playOrder, sections, automationValue, newEffect, newTrack, pruneAutomation, inapplicableParams, LIMITS, SongError,
+  nextBlock, playOrder, sections, automationValue, newEffect, newTrack, pruneAutomation, pruneSidechains, inapplicableParams, LIMITS, SongError,
 } from '../shared/song.js';
 import { registry } from 'gloaming-instruments';
 import { sampleSong } from './fixtures.js';
@@ -443,6 +443,29 @@ test('effects saved before they had uids get them, unique in their chain', () =>
   assert.equal(new Set(uids).size, 3);
   assert.ok(uids.every((u) => /^[a-z0-9]{1,24}$/.test(u)));
   assert.match(clean.mix.effects[0].uid, /^[a-z0-9]{1,24}$/);
+});
+
+test('sidechains name another track, on effects that have one', () => {
+  const song = sampleSong();
+  const [drums, bass, keys] = song.tracks;
+  const duck = { ...newEffect('compressor'), sidechain: drums.id };
+  bass.effects = [
+    duck,
+    { ...newEffect('vocoder'), sidechain: bass.id },     // its own track
+    { ...newEffect('delay'), sidechain: drums.id },      // no sidechain to feed
+    { ...newEffect('vocoder'), sidechain: 'ghost' },     // no such track
+  ];
+  song.mix.effects = [{ ...newEffect('vocoder'), sidechain: keys.id }];
+  const clean = normalizeSong(song);
+  assert.deepEqual(clean.tracks[1].effects.map((e) => e.sidechain), [drums.id, undefined, undefined, undefined]);
+  assert.equal(clean.mix.effects[0].sidechain, keys.id);
+  assert.deepEqual(normalizeSong(clean), clean);
+
+  // Deleting the source track leaves the effect listening to nothing.
+  clean.tracks = clean.tracks.filter((t) => t.id !== drums.id);
+  pruneSidechains(clean);
+  assert.equal('sidechain' in clean.tracks[0].effects[0], false);
+  assert.equal(clean.mix.effects[0].sidechain, keys.id);
 });
 
 test('patterns saved before automation get none', () => {
