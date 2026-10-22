@@ -3,6 +3,8 @@ import { html } from '../lib.js';
 import { api } from '../api.js';
 import { currentTheme } from '../theme.js';
 import { themeInfo } from '../../shared/themes.js';
+import { USER_LIMITS, usernameProblem, passwordProblem, emailProblem } from '../../shared/users.js';
+import { ForgotPassword } from './recovery.js';
 
 const GIS_SRC = 'https://accounts.google.com/gsi/client';
 const APPLE_SRC = 'https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js';
@@ -54,6 +56,91 @@ function AppleButton({ clientId, dark, onSignedIn, onError }) {
     </button>`;
 }
 
+/**
+ * A username and password, for anyone who'd rather not use Google or Apple.
+ * Creating an account picks the username here, since it's what they'll sign
+ * in with, so there's no username step after; the theme this device is
+ * showing becomes the account's. Where the server can send email
+ * (`recovery`), a recovery address can be given too, and a forgotten
+ * password reset from it.
+ */
+function PasswordForm({ recovery, onSignedIn }) {
+  const [mode, setMode] = useState('sign-in');   // or 'sign-up', 'forgot'
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [email, setEmail] = useState('');
+  const [shown, setShown] = useState(false);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const creating = mode === 'sign-up';
+  const problem = creating ? (username && usernameProblem(username)) || (password && passwordProblem(password, username)) : null;
+  const emailIssue = creating && email.trim() ? emailProblem(email.trim()) : null;
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const { user } = creating
+        ? await api.post('/auth/signup', { username, password, email: email.trim(), theme: currentTheme() })
+        : await api.post('/auth/login', { username, password });
+      onSignedIn(user);
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  };
+
+  const switchTo = (to) => {
+    setMode(to);
+    setError(null);
+  };
+  if (mode === 'forgot') return html`<${ForgotPassword} onBack=${() => switchTo('sign-in')} />`;
+
+  // method="post": were the script ever to miss the submit, the browser
+  // posts (refused, not JSON) rather than putting the password in a URL.
+  // No maxlength on the password: browsers cut a pasted one short, silently.
+  return html`
+    <form class="password-form" method="post" onSubmit=${submit}>
+      <label>
+        Username
+        <input name="username" value=${username} required spellcheck="false" autocapitalize="off" autocomplete="username"
+          onInput=${(e) => { setUsername(e.target.value.toLowerCase()); setError(null); }} />
+      </label>
+      <label>
+        Password
+        <span class="password-input">
+          <input name="password" type=${shown ? 'text' : 'password'} value=${password} required
+            autocomplete=${creating ? 'new-password' : 'current-password'}
+            onInput=${(e) => { setPassword(e.target.value); setError(null); }} />
+          <button type="button" class="ghost" aria-pressed=${shown} onClick=${() => setShown(!shown)}>${shown ? 'Hide' : 'Show'}</button>
+        </span>
+      </label>
+      ${creating && html`
+        <small class=${problem ? 'error' : 'muted'}>
+          ${problem || `At least ${USER_LIMITS.password[0]} characters.${recovery ? '' : " There's no email on file, so it can't be reset — a password manager helps."}`}
+        </small>`}
+      ${creating && recovery && html`
+        <label>
+          Recovery email (optional)
+          <input name="email" type="email" value=${email} spellcheck="false" autocomplete="email"
+            onInput=${(e) => { setEmail(e.target.value); setError(null); }} />
+        </label>
+        <small class=${emailIssue ? 'error' : 'muted'}>
+          ${emailIssue || "Where a reset link can go if you forget your password. We'll send a link to confirm it. Without one, a lost password can't be reset."}
+        </small>`}
+      ${error && html`<small class="error" role="alert">${error}</small>`}
+      <button class="primary" disabled=${busy || Boolean(problem) || Boolean(emailIssue)}>
+        ${busy ? (creating ? 'Creating…' : 'Signing in…') : creating ? 'Create account' : 'Sign in'}
+      </button>
+      <p class="muted">
+        ${creating ? 'Have an account? ' : 'New here? '}
+        <button type="button" class="link" onClick=${() => switchTo(creating ? 'sign-in' : 'sign-up')}>${creating ? 'Sign in' : 'Create an account'}</button>
+      </p>
+      ${!creating && recovery && html`<p><button type="button" class="link" onClick=${() => switchTo('forgot')}>Forgot your password?</button></p>`}
+    </form>`;
+}
+
 export function SignIn({ config, onSignedIn, next }) {
   const buttonRef = useRef();
   const [error, setError] = useState(null);
@@ -86,13 +173,13 @@ export function SignIn({ config, onSignedIn, next }) {
       ${config.googleClientId && html`<div ref=${buttonRef} class="google-button"></div>`}
       ${config.appleClientId && html`
         <${AppleButton} clientId=${config.appleClientId} dark=${dark} onSignedIn=${onSignedIn} onError=${(e) => setError(e.message)} />`}
+      ${anyProvider && html`<p class="or" role="separator">or</p>`}
+      <${PasswordForm} recovery=${config.recoveryEmail} onSignedIn=${onSignedIn} />
       ${config.devLogin && html`
         <form class="dev-login" onSubmit=${devSignIn}>
           <input placeholder="Dev user name (blank: pick one after)" value=${devName} onInput=${(e) => setDevName(e.target.value)} />
           <button>Dev sign-in</button>
         </form>`}
-      ${!anyProvider && !config.devLogin && html`
-        <p class="notice">Sign-in isn't configured. Set GOOGLE_CLIENT_ID and/or APPLE_CLIENT_ID (or DEV_LOGIN=1 locally) and restart.</p>`}
       ${error && html`<p class="error">${error}</p>`}
     </main>
   `;

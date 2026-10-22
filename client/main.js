@@ -8,6 +8,7 @@ import { Feed, feedPath } from './ui/feed.js';
 import { Profile } from './ui/profile.js';
 import { ChooseUsername } from './ui/choose-username.js';
 import { Settings } from './ui/settings.js';
+import { ResetPassword, ConfirmEmail } from './ui/recovery.js';
 import { Notifications, NotificationBell, useUnread } from './ui/notifications.js';
 import { applyTheme, storedTheme } from './theme.js';
 
@@ -30,12 +31,16 @@ const EDITOR_VIEWS = 'instruments|patterns|song|visuals|publish';
  *   /notifications     what's happened to your songs, and new ones from people you follow (signed in)
  *   /songs/:id/:view   the editor (signed in)
  *   /sign-in           sign in, then back to ?next=
+ *   /reset-password    a reset link from a recovery email (#token)
+ *   /confirm-email     a recovery email's confirmation link (#token)
  *   /embed/:id         a published song's player alone, for iframes on other sites
  */
 function route(path) {
   let m;
   if (path === '/') return { name: 'feed' };
   if (path === '/sign-in') return { name: 'sign-in' };
+  if (path === '/reset-password') return { name: 'reset-password' };
+  if (path === '/confirm-email') return { name: 'confirm-email' };
   if (path === '/studio') return { name: 'studio', auth: true };
   if (path === '/settings') return { name: 'settings', auth: true };
   if (path === '/notifications') return { name: 'notifications', auth: true };
@@ -113,6 +118,10 @@ function App() {
     page = user
       ? (navigate(next), null)
       : html`<${SignIn} config=${session.config} next=${next} onSignedIn=${(u) => { setUser(u); navigate(next); }} />`;
+  } else if (r.name === 'reset-password') {
+    page = html`<${ResetPassword} onSignedIn=${(u) => { setUser(u); navigate('/studio'); }} />`;
+  } else if (r.name === 'confirm-email') {
+    page = html`<${ConfirmEmail} user=${user} onConfirmed=${() => user && api.get('/auth/me').then((me) => setUser(me.user))} />`;
   } else if (r.name === 'feed') {
     page = html`<${Feed} user=${user} />`;
   } else if (r.name === 'studio') {
@@ -120,7 +129,7 @@ function App() {
   } else if (r.name === 'notifications') {
     page = html`<${Notifications} user=${user} onSeen=${() => setUnread(0)} />`;
   } else if (r.name === 'settings') {
-    page = html`<${Settings} user=${user} onUserChange=${setUser} onSignOut=${signOut} />`;
+    page = html`<${Settings} user=${user} config=${session.config} onUserChange=${setUser} onSignOut=${signOut} />`;
   } else if (r.name === 'editor') {
     page = html`<${Editor} key=${r.id} songId=${r.id} view=${r.view} />`;
   } else if (r.name === 'song') {

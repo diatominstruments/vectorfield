@@ -32,8 +32,43 @@ function setCookie(res, value, maxAgeSeconds) {
 export const publicUser = (u) => ({
   id: String(u.id), username: u.username, avatarUrl: u.avatar_url, bio: u.bio ?? '', interests: u.interests ?? [],
 });
-/** What the user sees of themselves: also their email and colour theme. */
-const selfUser = (u) => ({ ...publicUser(u), email: u.email, theme: isTheme(u.theme) ? u.theme : DEFAULT_THEME });
+/**
+ * What the user sees of themselves: also their email, colour theme, and —
+ * for a password account — its recovery email and whether that's confirmed.
+ */
+export const selfUser = (u) => ({
+  ...publicUser(u), email: u.email, theme: isTheme(u.theme) ? u.theme : DEFAULT_THEME,
+  hasPassword: Boolean(u.has_password), recoveryEmail: u.recovery_email ?? null, recoveryEmailConfirmed: Boolean(u.recovery_email_confirmed),
+});
+
+// A users row `u` with what selfUser needs from its passwords row `p`, if it has one (never the hash).
+const SELF = `u.*, (p.user_id is not null) as has_password, p.email as recovery_email,
+  (p.email_verified_at is not null) as recovery_email_confirmed`;
+
+/** A user as selfUser wants them, by id. */
+export async function loadSelf(db, id) {
+  const { rows } = await db.query(`select ${SELF} from users u left join passwords p on p.user_id = u.id where u.id = $1`, [id]);
+  return rows[0] ?? null;
+}
+
+/** Sign `user` in: a new session cookie, and the user as they see themselves. */
+export async function startSession(db, res, user) {
+  const token = randomBytes(32).toString('base64url');
+  const days = config.sessionDays;
+  await db.query(
+    `insert into sessions (token_hash, user_id, expires_at)
+     values ($1, $2, now() + make_interval(days => $3))`,
+    [hash(token), user.id, days],
+  );
+  setCookie(res, token, days * 86400);
+  res.json({ user: selfUser(user) });
+}
+
+/** Sign a user out everywhere — except, if given, the session that made `req`. */
+export async function endSessions(db, userId, req = null) {
+  const token = req && parseCookies(req.headers.cookie)[COOKIE];
+  await db.query('delete from sessions where user_id = $1 and token_hash <> $2', [userId, token ? hash(token) : '']);
+}
 
 /** A username nobody has yet, from some text: ada, ada2, ada3, … (dev sign-in only). */
 async function freeUsername(db, text) {
@@ -51,23 +86,12 @@ async function freeUsername(db, text) {
  * signature and audience here, then issue our own session cookie. The
  * provider is only involved at sign-in, and only the account id, verified
  * email and (Google's) avatar are kept — never the name. A new account has
- * no username until its owner picks one.
+ * no username until its owner picks one. (Or no provider at all: a username
+ * and password — see password-auth.js.)
  */
 export function authRouter(db) {
   const router = Router();
   const google = config.googleClientId ? new OAuth2Client(config.googleClientId) : null;
-
-  async function startSession(res, user) {
-    const token = randomBytes(32).toString('base64url');
-    const days = config.sessionDays;
-    await db.query(
-      `insert into sessions (token_hash, user_id, expires_at)
-       values ($1, $2, now() + make_interval(days => $3))`,
-      [hash(token), user.id, days],
-    );
-    setCookie(res, token, days * 86400);
-    res.json({ user: selfUser(user) });
-  }
 
   async function upsertUser({ provider = 'google', sub, email, picture, username = null }) {
     const col = provider === 'apple' ? 'apple_sub' : 'google_sub';
@@ -98,7 +122,7 @@ export function authRouter(db) {
       email: payload.email_verified ? payload.email : null,
       picture: payload.picture,
     });
-    await startSession(res, user);
+    await startSession(db, res, user);
   });
 
   // Apple sends the email in every ID token, though it's often a private
@@ -113,7 +137,7 @@ export function authRouter(db) {
     }
     const verified = payload.email_verified === true || payload.email_verified === 'true';
     const user = await upsertUser({ provider: 'apple', sub: payload.sub, email: verified ? payload.email : null });
-    await startSession(res, user);
+    await startSession(db, res, user);
   });
 
   if (config.devLogin) {
@@ -127,7 +151,7 @@ export function authRouter(db) {
       const existing = await db.query('select 1 from users where google_sub = $1', [sub]);
       const username = name && !existing.rows.length ? await freeUsername(db, name) : null;
       const user = await upsertUser({ sub, username });
-      await startSession(res, user);
+      await startSession(db, res, user);
     });
   }
 
@@ -167,7 +191,7 @@ export function authRouter(db) {
         'update users set bio = $2, interests = $3, username = $4, theme = $5 where id = $1 returning *',
         [user.id, bio, JSON.stringify(interests), username, theme],
       );
-      res.json({ user: selfUser(rows[0]) });
+      res.json({ user: selfUser({ ...user, ...rows[0] }) });
     } catch (err) {
       // Two people claiming one username at the same instant: the unique index decides.
       if (/unique|duplicate/i.test(err.message)) return res.status(409).json({ error: 'That username is taken' });
@@ -184,7 +208,8 @@ export async function sessionUser(db, req) {
   const token = parseCookies(req.headers.cookie)[COOKIE];
   if (!token) return null;
   const { rows } = await db.query(
-    `select u.* from sessions s join users u on u.id = s.user_id
+    `select ${SELF}
+     from sessions s join users u on u.id = s.user_id left join passwords p on p.user_id = u.id
      where s.token_hash = $1 and s.expires_at > now()`,
     [hash(token)],
   );

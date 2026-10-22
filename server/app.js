@@ -3,6 +3,7 @@ import compression from 'compression';
 import { MAX_SONG_BYTES } from '../shared/song.js';
 import { config } from './config.js';
 import { authRouter, sessionMiddleware } from './auth.js';
+import { passwordRouter } from './password-auth.js';
 import { songsRouter } from './songs.js';
 import { publicRouter } from './public.js';
 import { likesRouter } from './likes.js';
@@ -27,9 +28,16 @@ const CSP = [
   "frame-ancestors 'self'",
 ].join('; ');
 
-export function createApp(db) {
+/**
+ * `mailer` sends email (see mail.js; without one there are no recovery
+ * emails), and `pwned` stands in for the breached-password check in tests.
+ */
+export function createApp(db, { mailer = null, pwned } = {}) {
   const app = express();
   app.disable('x-powered-by');
+  // Who's on the other end, behind a proxy: rate limits on sign-in go by it.
+  if (config.trustProxy) app.set('trust proxy', config.trustProxy);
+  let warnedProxy = false;
   // Brotli/gzip for every text response; the client bundle shrinks ~85%.
   app.use(compression());
 
@@ -39,6 +47,14 @@ export function createApp(db) {
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     // Lets the Google and Apple sign-in popups report back to this window.
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+    // Passwords are typed into this site, so browsers that have been here
+    // once must only ever come back over HTTPS.
+    if (config.production) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
+    if (!config.trustProxy && !warnedProxy && req.headers['x-forwarded-for']) {
+      warnedProxy = true;
+      console.warn('Requests are coming through a proxy but TRUST_PROXY is unset, so every visitor shares one '
+        + 'limit on password sign-ins and sign-ups. See .env.example.');
+    }
     next();
   });
 
@@ -56,9 +72,12 @@ export function createApp(db) {
   api.use(sessionMiddleware(db));
 
   api.get('/config', (_req, res) => {
-    res.json({ googleClientId: config.googleClientId, appleClientId: config.appleClientId, devLogin: config.devLogin });
+    res.json({
+      googleClientId: config.googleClientId, appleClientId: config.appleClientId, devLogin: config.devLogin, recoveryEmail: Boolean(mailer),
+    });
   });
   api.use('/auth', authRouter(db));
+  api.use('/auth', passwordRouter(db, { pwned, mailer }));
   api.use('/songs', songsRouter(db));
   api.use('/likes', likesRouter(db));
   api.use('/follows', followsRouter(db));

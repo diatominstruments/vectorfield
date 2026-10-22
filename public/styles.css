@@ -186,6 +186,16 @@ header.site img { width: 26px; height: 26px; border-radius: 50%; }
 .sign-in .brand { font-size: 40px; margin: 0; }
 .sign-in .tagline { margin: -10px 0 8px; color: var(--muted); }
 .dev-login { display: flex; gap: 8px; }
+.sign-in .or { display: flex; align-items: center; gap: 12px; width: min(300px, 100%); margin: 0; color: var(--muted); font-size: 13px; }
+.sign-in .or::before, .sign-in .or::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
+.password-form { display: grid; gap: 10px; width: min(300px, 100%); text-align: left; }
+.password-form label, .change-password label, .reset-password label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.password-form input, .change-password input, .reset-password input { color: var(--fg); font-size: 15px; padding: 7px 10px; }
+.password-input { display: flex; gap: 4px; }
+.password-input input { flex: 1; min-width: 0; }
+.password-input button { font-size: 13px; color: var(--muted); }
+.password-form .primary { padding: 8px 11px; }
+.password-form p { margin: 0; text-align: center; font-size: 13px; }
 /* Sized to sit under Google's large pill button. Apple's guidelines: white
    on dark backgrounds, black on light — their colours, not the theme's. */
 .apple-button {
@@ -1055,6 +1065,7 @@ html.embedded #app { height: 100%; }
 .settings dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0; font-size: 13px; }
 .settings dt { color: var(--muted); }
 .settings dd { margin: 0; }
+.change-password { display: grid; gap: 10px; max-width: 320px; }
 
 header.site .user .settings-link { color: var(--muted); padding: 5px 8px; border-radius: var(--radius); }
 header.site .user .settings-link:hover, header.site .user .settings-link.active { color: var(--fg); }

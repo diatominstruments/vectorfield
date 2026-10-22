@@ -51,6 +51,28 @@ The two aren't linked — signing in with each makes two accounts. After a
 first sign-in the user picks a username, which is the one name shown
 anywhere in the app and the address of their profile, and a colour theme.
 
+Or a username and password, for anyone who'd rather not use either: the
+username is picked when the account is made, since it's what they sign in
+with. Passwords are kept only as Argon2id hashes (64 MiB, 3 passes) in
+their own table, never on `users`; ones found in known breaches are turned
+away (via Have I Been Pwned's k-anonymity API — only 5 hex digits of a
+SHA-1 leave the server; if it's unreachable, sign-up goes ahead); wrong
+guesses are limited per account and per address; and changing a password
+signs out every other session. Production sends HSTS. Behind a proxy, set
+`TRUST_PROXY` so the limits see visitors' real addresses.
+
+**Recovery email.** Off unless `RECOVERY_EMAIL=1`; until then nothing about
+email shows in the app, and a lost password can't be reset. Turned on, a
+password account can add an email, at sign-up or in settings, to reset a
+forgotten password from. It's used only once confirmed
+from a link sent to it, and changing it takes the current password. Reset
+links work once, for an hour; using one signs out every session. Emailed
+tokens are stored hashed and travel after the `#` in links, so they stay
+out of server logs. The confirmed address is told when the password or the
+address changes. In production it needs `SMTP_URL` (any provider's SMTP
+server) and `PUBLIC_URL`, or the server won't start; in development,
+without `SMTP_URL`, emails are printed to the server log.
+
 **Themes.** Dark (the default), light, goth, dawn and forest, listed in
 `shared/themes.js`. Every colour in `public/styles.css` is a token set per
 theme under a `[data-theme]` selector, including the saturation and
@@ -93,6 +115,7 @@ client/            Preact + htm, bundled by esbuild
   ui/embed.js      the embed player: just the stage, for an iframe on another site
   ui/genre-picker.js  choosing genres, for a song's tags or a profile's interests
   ui/theme-picker.js  choosing a colour theme, at signup and in ui/settings.js
+  ui/recovery.js   a password account's recovery email: forgot password, the reset and confirm pages, its settings panel
 shared/song.js     the song document format and its validation — both sides use it
 shared/bounce.js, shared/tubules.js, shared/ants.js, shared/fireflies.js, shared/bees.js, shared/frogs.js, shared/sandpile.js, shared/lilypond.js
                    each generative sequencer's settings and their validation
@@ -104,6 +127,9 @@ shared/themes.js   the colour themes; their tokens are in public/styles.css
 shared/embed.js    embed and picture sizes, and the iframe code, for the share menu and oEmbed alike
 server/            Express 5
   auth.js          Google/Apple ID token → our own session cookie; profile edits
+  password-auth.js username-and-password accounts: sign-up, sign-in, changing the password, recovery email and resets
+  passwords.js     password hashing, the breached-password check, limits on guessing
+  mail.js          sending email (SMTP, or the log in development), and every email's wording
   apple.js         verifies Apple ID tokens against Apple's published keys
   songs.js         the owner's side: CRUD with revision checks, publishing
   public.js        what anyone can read: the feed, profiles, published songs
