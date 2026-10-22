@@ -484,13 +484,13 @@ get-proto@^1.0.1:
     dunder-proto "^1.0.1"
     es-object-atoms "^1.0.0"
 
-"gloaming-instruments@github:diatominstruments/gloaming-instruments#c9475c818b9d657fb0aa3c0fb3cf8aca52ff77b8":
+"gloaming-instruments@github:diatominstruments/gloaming-instruments#3add5e754a9d715b338706b130ffaa0033a7d15f":
   version "0.1.0"
-  resolved "https://codeload.github.com/diatominstruments/gloaming-instruments/tar.gz/c9475c818b9d657fb0aa3c0fb3cf8aca52ff77b8"
+  resolved "https://codeload.github.com/diatominstruments/gloaming-instruments/tar.gz/3add5e754a9d715b338706b130ffaa0033a7d15f"
 
-"gloaming-kit@github:diatominstruments/gloaming-kit#0e9836e6406efd797dd2513851af3efcf961cfc8":
+"gloaming-kit@github:diatominstruments/gloaming-kit#36aa3084b01a8fe5ca6bcbab2b80812bd68e74a4":
   version "0.1.0"
-  resolved "https://codeload.github.com/diatominstruments/gloaming-kit/tar.gz/0e9836e6406efd797dd2513851af3efcf961cfc8"
+  resolved "https://codeload.github.com/diatominstruments/gloaming-kit/tar.gz/36aa3084b01a8fe5ca6bcbab2b80812bd68e74a4"
 
 google-auth-library@^11.1.0:
   version "11.1.0"
