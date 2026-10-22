@@ -35,7 +35,8 @@ async function call(path, { method = 'POST', body, cookie } = {}) {
     headers: { ...(cookie ? { cookie } : {}), ...(body ? { 'content-type': 'application/json' } : {}) },
     body: body && JSON.stringify(body),
   });
-  return { status: res.status, body: await res.json(), cookie: res.headers.get('set-cookie')?.split(';')[0] };
+  const cookies = res.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+  return { status: res.status, body: await res.json(), cookie: cookies || undefined };
 }
 const signUp = (username, password, email) => call('/auth/signup', { body: { username, password, email } });
 const logIn = (username, password) => call('/auth/login', { body: { username, password } });
@@ -120,6 +121,8 @@ test('a forgotten password is reset from the emailed link', async () => {
   assert.equal((await forgot('NOVA@example.com')).status, 200);   // by address, too
   const byAddress = lastTo('nova@example.com', 'reset-password');
   assert.notEqual(byAddress.token, byName.token);
+  const knownBrowsers = async () => (await db.query("select 1 from devices d join users u on u.id = d.user_id where u.username = 'nova'")).rows.length;
+  assert.equal(await knownBrowsers(), 2);
 
   assert.deepEqual((await call('/auth/reset-link', { body: { token: byName.token } })).body, { username: 'nova' });
   assert.equal((await call('/auth/reset', { body: { token: byName.token, password: 'short' } })).status, 400);
@@ -131,6 +134,7 @@ test('a forgotten password is reset from the emailed link', async () => {
   assert.equal((await me(reset.cookie)).username, 'nova');
   assert.equal(await me(first), null);   // everywhere else is signed out
   assert.equal(await me(other), null);
+  assert.equal(await knownBrowsers(), 1);   // and only this browser is a known one
   assert.equal((await logIn('nova', 'old pass phrase')).status, 401);
   assert.equal((await logIn('nova', 'new pass phrase')).status, 200);
 

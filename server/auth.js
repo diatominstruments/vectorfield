@@ -11,7 +11,7 @@ import { notify } from './notifications.js';
 const COOKIE = 'sid';
 const hash = (token) => createHash('sha256').update(token).digest('hex');
 
-function parseCookies(header = '') {
+export function parseCookies(header = '') {
   const out = {};
   for (const part of header.split(';')) {
     const i = part.indexOf('=');
@@ -20,12 +20,13 @@ function parseCookies(header = '') {
   return out;
 }
 
-function setCookie(res, value, maxAgeSeconds) {
+/** A cookie scripts can't read — the session's, unless `name` says otherwise. One response can set several. */
+export function setCookie(res, value, maxAgeSeconds, { name = COOKIE, path = '/' } = {}) {
   const attrs = [
-    `${COOKIE}=${value}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeSeconds}`,
+    `${name}=${value}`, `Path=${path}`, 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeSeconds}`,
   ];
   if (config.production) attrs.push('Secure');
-  res.setHeader('Set-Cookie', attrs.join('; '));
+  res.append('Set-Cookie', attrs.join('; '));
 }
 
 /** What anyone may see of a user. `username` is null until they've chosen one. */

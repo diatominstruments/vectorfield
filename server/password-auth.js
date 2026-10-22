@@ -1,11 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { Router } from 'express';
 import { config } from './config.js';
-import { startSession, loadSelf, selfUser, endSessions, requireUser } from './auth.js';
+import { startSession, loadSelf, selfUser, endSessions, requireUser, parseCookies, setCookie } from './auth.js';
 import { notify } from './notifications.js';
 import { emails } from './mail.js';
 import {
-  hashPassword, verifyPassword, needsRehash, dummyHash, pwnedCount, tooManyAttempts, recordAttempt, clearAttempts,
+  hashPassword, verifyPassword, needsRehash, dummyHash, pwnedCount, claimAttempt, clearAttempts,
 } from './passwords.js';
 import { usernameProblem, passwordProblem, emailProblem } from '../shared/users.js';
 import { DEFAULT_THEME, isTheme } from '../shared/themes.js';
@@ -24,6 +24,10 @@ const noMail = (res) => res.status(503).json({ error: "Recovery emails aren't se
 // How long an emailed link works, and the page it opens.
 const LINKS = { verify: { hours: 24, page: 'confirm-email' }, reset: { hours: 1, page: 'reset-password' } };
 const tokenHash = (token) => createHash('sha256').update(String(token ?? '')).digest('hex');
+
+// The cookie that marks a browser as one that has signed in to an account
+// before, and how long it lasts without another sign-in (see trustDevice).
+const DEVICE = { cookie: 'device', days: 365 };
 
 /**
  * Username-and-password accounts: signing up and in, changing the password,
@@ -86,6 +90,39 @@ export function passwordRouter(db, { pwned = pwnedCount, mailer = null } = {}) {
     return rows[0]?.live ? rows[0] : null;
   }
 
+  /** This browser's device token as it came, if it looks like one we'd have made. */
+  function deviceToken(req) {
+    const token = parseCookies(req.headers.cookie)[DEVICE.cookie];
+    return /^[A-Za-z0-9_-]{43}$/.test(token ?? '') ? token : null;
+  }
+
+  /** This browser's device token, hashed, if it has signed in to `userId` before; otherwise null. */
+  async function knownDevice(req, userId) {
+    const token = deviceToken(req);
+    if (!token || !userId) return null;
+    const { rows } = await db.query('select token_hash from devices where token_hash = $1 and user_id = $2', [tokenHash(token), userId]);
+    return rows[0]?.token_hash ?? null;
+  }
+
+  /**
+   * Remember this browser as one `userId` signs in from — with `only`, the
+   * one — in a cookie that outlives its sessions and goes only to these
+   * routes. Its wrong guesses then count against it alone, so nobody
+   * guessing at the account from elsewhere can lock it out (passwords.js).
+   * A browser keeps one token for every account it signs in to.
+   */
+  async function trustDevice(req, res, userId, { only = false } = {}) {
+    const token = deviceToken(req) ?? randomBytes(32).toString('base64url');
+    if (only) await db.query('delete from devices where user_id = $1', [userId]);
+    await db.query('delete from devices where last_used_at < now() - make_interval(days => $1)', [DEVICE.days]);
+    await db.query(
+      `insert into devices (token_hash, user_id) values ($1, $2)
+       on conflict (token_hash, user_id) do update set last_used_at = now()`,
+      [tokenHash(token), userId],
+    );
+    setCookie(res, token, DEVICE.days * 86400, { name: DEVICE.cookie, path: req.baseUrl });
+  }
+
   /**
    * The signed-in user's current password must come with the request (as
    * `current`), and wrong guesses count against the same limit as sign-ins.
@@ -93,12 +130,13 @@ export function passwordRouter(db, { pwned = pwnedCount, mailer = null } = {}) {
   async function requireCurrentPassword(req, res, next) {
     const { rows } = await db.query('select hash from passwords where user_id = $1', [req.user.id]);
     if (!rows.length) return res.status(400).json({ error: 'This account signs in with Google or Apple' });
-    const who = { username: req.user.username, ip: req.ip };
-    if (await tooManyAttempts(db, 'login', who)) return tooMany(res);
+    const claim = await claimAttempt(db, 'login', { username: req.user.username, ip: req.ip, device: await knownDevice(req, req.user.id) });
+    if (!claim) return tooMany(res);
+    // A wrong one keeps the try it took; the right one gives it back.
     if (!(await verifyPassword(typedPassword(req.body?.current), rows[0].hash))) {
-      await recordAttempt(db, 'login', who);
       return res.status(403).json({ error: 'Your current password is wrong' });
     }
+    await claim.release();
     next();
   }
 
@@ -112,10 +150,16 @@ export function passwordRouter(db, { pwned = pwnedCount, mailer = null } = {}) {
     const problem = usernameProblem(username) ?? passwordProblem(password, username) ?? (email ? emailProblem(email) : null);
     if (problem) return res.status(400).json({ error: problem });
     if (email && !mailer) return noMail(res);
-    if (await tooManyAttempts(db, 'signup', { ip: req.ip })) return tooMany(res);
+    // Only an account actually made keeps the try it takes.
+    const claim = await claimAttempt(db, 'signup', { ip: req.ip });
+    if (!claim) return tooMany(res);
+    const refuse = async (status, error) => {
+      await claim.release();
+      res.status(status).json({ error });
+    };
     const taken = await db.query('select 1 from users where username = $1', [username]);
-    if (taken.rows.length) return res.status(409).json({ error: 'That username is taken' });
-    if ((await pwned(password)) > 0) return res.status(400).json({ error: BREACHED });
+    if (taken.rows.length) return refuse(409, 'That username is taken');
+    if ((await pwned(password)) > 0) return refuse(400, BREACHED);
 
     const hashed = await hashPassword(password);
     const theme = isTheme(req.body?.theme) ? req.body.theme : DEFAULT_THEME;
@@ -127,12 +171,12 @@ export function passwordRouter(db, { pwned = pwnedCount, mailer = null } = {}) {
         return rows[0];
       });
     } catch (err) {
-      if (/unique|duplicate/i.test(err.message)) return res.status(409).json({ error: 'That username is taken' });
+      if (/unique|duplicate/i.test(err.message)) return refuse(409, 'That username is taken');
       throw err;
     }
-    await recordAttempt(db, 'signup', { ip: req.ip });
     await notify(db, { to: user.id, kind: 'welcome' });
     if (email) await send(email, emails.verify({ username, link: await newLink(req, user, 'verify', email) }));
+    await trustDevice(req, res, user.id);
     await startSession(db, res, await loadSelf(db, user.id));
   });
 
@@ -142,30 +186,30 @@ export function passwordRouter(db, { pwned = pwnedCount, mailer = null } = {}) {
     const username = typedUsername(req.body?.username);
     const password = typedPassword(req.body?.password);
     if (!username || !password) return res.status(400).json({ error: 'Enter your username and password' });
-    const who = { username, ip: req.ip };
-    if (await tooManyAttempts(db, 'login', who)) return tooMany(res);
-
     const { rows } = await db.query(
       'select u.id, p.hash from users u join passwords p on p.user_id = u.id where u.username = $1',
       [username],
     );
+    // A wrong password keeps the try it takes here.
+    const who = { username, ip: req.ip, device: await knownDevice(req, rows[0]?.id) };
+    if (!(await claimAttempt(db, 'login', who))) return tooMany(res);
+
     const stored = rows[0]?.hash;
     const right = await verifyPassword(password, stored ?? await dummyHash());
-    if (!right || !stored) {
-      await recordAttempt(db, 'login', who);
-      return res.status(401).json({ error: 'Wrong username or password' });
-    }
+    if (!right || !stored) return res.status(401).json({ error: 'Wrong username or password' });
     await clearAttempts(db, 'login', who);
     if (needsRehash(stored)) {
       await db.query('update passwords set hash = $2, updated_at = now() where user_id = $1', [rows[0].id, await hashPassword(password)]);
     }
+    await trustDevice(req, res, rows[0].id);
     await startSession(db, res, await loadSelf(db, rows[0].id));
   });
 
-  // Changing the password signs out every other session, in case someone
-  // else knew the old one, and kills any reset links still out there. A
-  // confirmed recovery address hears about it, so a change its owner
-  // didn't make can be undone from there.
+  // Changing the password signs out every other session and forgets every
+  // other browser it was signed in from, in case someone else knew the old
+  // one, and kills any reset links still out there. A confirmed recovery
+  // address hears about it, so a change its owner didn't make can be
+  // undone from there.
   router.put('/password', requireUser, requireCurrentPassword, async (req, res) => {
     const user = req.user;
     const password = typedPassword(req.body?.password);
@@ -176,6 +220,7 @@ export function passwordRouter(db, { pwned = pwnedCount, mailer = null } = {}) {
     await db.query('update passwords set hash = $2, updated_at = now() where user_id = $1', [user.id, await hashPassword(password)]);
     await db.query("delete from email_tokens where user_id = $1 and purpose = 'reset'", [user.id]);
     await endSessions(db, user.id, req);
+    await trustDevice(req, res, user.id, { only: true });
     if (user.recovery_email_confirmed) await send(user.recovery_email, emails.passwordChanged({ username: user.username }));
     res.json({ ok: true });
   });
@@ -193,11 +238,7 @@ export function passwordRouter(db, { pwned = pwnedCount, mailer = null } = {}) {
     if (problem) return res.status(400).json({ error: problem });
     const same = Boolean(email) && email.toLowerCase() === user.recovery_email?.toLowerCase();
     if (same && user.recovery_email_confirmed) return res.json({ user: selfUser(user) });
-    if (email) {
-      const who = { username: user.username, ip: req.ip };
-      if (await tooManyAttempts(db, 'email', who)) return tooMany(res);
-      await recordAttempt(db, 'email', who);
-    }
+    if (email && !(await claimAttempt(db, 'email', { username: user.username, ip: req.ip }))) return tooMany(res);
 
     await db.query('update passwords set email = $2, email_verified_at = null where user_id = $1', [user.id, email || null]);
     await db.query('delete from email_tokens where user_id = $1', [user.id]);
@@ -229,9 +270,7 @@ export function passwordRouter(db, { pwned = pwnedCount, mailer = null } = {}) {
     if (!mailer) return noMail(res);
     const given = typedUsername(req.body?.username);
     if (!given) return res.status(400).json({ error: 'Enter your username or recovery email' });
-    const who = { username: given, ip: req.ip };
-    if (await tooManyAttempts(db, 'email', who)) return tooMany(res);
-    await recordAttempt(db, 'email', who);
+    if (!(await claimAttempt(db, 'email', { username: given, ip: req.ip }))) return tooMany(res);
 
     const { rows } = await db.query(
       `select u.id, u.username, p.email from users u join passwords p on p.user_id = u.id
@@ -251,8 +290,9 @@ export function passwordRouter(db, { pwned = pwnedCount, mailer = null } = {}) {
     res.json({ username: user.username });
   });
 
-  // Choosing a new password from a reset link signs out every session and
-  // signs this one in: having the inbox is proof enough.
+  // Choosing a new password from a reset link signs out every session,
+  // forgets every browser the account was signed in from, and signs this
+  // one in: having the inbox is proof enough.
   router.post('/reset', async (req, res) => {
     const token = await liveToken(req.body?.token, 'reset');
     const user = token && (await loadSelf(db, token.user_id));
@@ -273,6 +313,7 @@ export function passwordRouter(db, { pwned = pwnedCount, mailer = null } = {}) {
     if (!rows.length) return res.status(400).json({ error: LINK_DEAD });
     await db.query("delete from email_tokens where user_id = $1 and purpose = 'reset'", [user.id]);
     await endSessions(db, user.id);
+    await trustDevice(req, res, user.id, { only: true });
     await startSession(db, res, user);
   });
 

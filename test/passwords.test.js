@@ -4,6 +4,8 @@ import { createHash } from 'node:crypto';
 
 process.env.PGLITE_DIR = 'memory://';
 process.env.DEV_LOGIN = '1';
+// So requests can come from different addresses, by X-Forwarded-For.
+process.env.TRUST_PROXY = '1';
 delete process.env.DATABASE_URL;
 
 const { hashPassword, verifyPassword, needsRehash, pwnedCount } = await import('../server/passwords.js');
@@ -28,18 +30,23 @@ after(async () => {
   await db.close();
 });
 
-/** A request as a browser holding `cookie` would make it; the reply's new cookie, if any, comes back. */
-async function call(path, { method = 'GET', body, cookie } = {}) {
+/**
+ * A request as a browser holding `cookie` would make it, from the address
+ * `ip` if given; the cookies the reply sets, if any, come back together.
+ */
+async function call(path, { method = 'GET', body, cookie, ip } = {}) {
   const res = await fetch(`${base}${path}`, {
     method,
-    headers: { ...(cookie ? { cookie } : {}), ...(body ? { 'content-type': 'application/json' } : {}) },
+    headers: { ...(cookie ? { cookie } : {}), ...(ip ? { 'x-forwarded-for': ip } : {}), ...(body ? { 'content-type': 'application/json' } : {}) },
     body: body && JSON.stringify(body),
   });
   const text = await res.text();
-  return { status: res.status, body: JSON.parse(text), text, cookie: res.headers.get('set-cookie')?.split(';')[0] };
+  const cookies = res.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
+  return { status: res.status, body: JSON.parse(text), text, cookie: cookies || undefined };
 }
-const signUp = (username, password, extra = {}) => call('/auth/signup', { method: 'POST', body: { username, password, ...extra } });
-const logIn = (username, password) => call('/auth/login', { method: 'POST', body: { username, password } });
+// `from`: the `cookie` and `ip` to send them with.
+const signUp = (username, password, extra = {}, from = {}) => call('/auth/signup', { method: 'POST', body: { username, password, ...extra }, ...from });
+const logIn = (username, password, from = {}) => call('/auth/login', { method: 'POST', body: { username, password }, ...from });
 const me = async (cookie) => (await call('/auth/me', { cookie })).body.user;
 
 test('passwords hash with a fresh salt each time, and verify', async () => {
@@ -151,6 +158,57 @@ test('a right password forgives earlier misses', async () => {
   for (let i = 0; i < 4; i++) await logIn('forgetful', `not it ${i}`);
   assert.equal((await logIn('forgetful', 'remembered at last')).status, 200);
   for (let i = 0; i < 4; i++) assert.equal((await logIn('forgetful', `not it again ${i}`)).status, 401);
+});
+
+test('wrong guesses sent all at once are held to the same limit', async () => {
+  await signUp('rushed', 'right password here');
+  const from = { ip: '203.0.113.1' };
+  const statuses = (await Promise.all(Array.from({ length: 20 }, (_, i) => logIn('rushed', `wrong guess ${i}`, from)))).map((r) => r.status);
+  assert.ok(statuses.every((s) => s === 401 || s === 429), `${statuses}`);
+  assert.ok(statuses.filter((s) => s === 401).length <= 5, `more than 5 guesses were checked: ${statuses}`);
+});
+
+test('sign-ups sent all at once are held to the same limit', async () => {
+  const from = { ip: '203.0.113.2' };
+  const statuses = (await Promise.all(Array.from({ length: 15 }, (_, i) => signUp(`rush_${i}`, 'bulk password here', {}, from)))).map((r) => r.status);
+  assert.ok(statuses.every((s) => s === 200 || s === 429), `${statuses}`);
+  assert.ok(statuses.filter((s) => s === 200).length <= 10, `more than 10 accounts were made: ${statuses}`);
+});
+
+/** Someone else's wrong guesses at `username`: five from each of six addresses, enough to use up the account's tries. */
+async function besiege(username, firstAddress) {
+  for (let a = 0; a < 6; a++) {
+    const from = { ip: `192.0.2.${firstAddress + a}` };
+    for (let i = 0; i < 5; i++) assert.equal((await logIn(username, `wrong guess ${i}`, from)).status, 401);
+  }
+}
+
+test("guessing at an account can't lock its owner out of a browser they've signed in from", async () => {
+  const home = { ip: '198.51.100.1' };
+  const browser = (await signUp('besieged', 'right password here', {}, home)).cookie;
+  await besiege('besieged', 10);
+
+  // A browser that hasn't signed in to it before can't now, even with the right password…
+  assert.equal((await logIn('besieged', 'right password here', { ip: '198.51.100.2' })).status, 429);
+  // …but the owner's can, from home or even from an address the guesses came from.
+  assert.equal((await logIn('besieged', 'right password here', { ...home, cookie: browser })).status, 200);
+  assert.equal((await logIn('besieged', 'right password here', { ip: '192.0.2.10', cookie: browser })).status, 200);
+  assert.equal((await logIn('besieged', 'right password here', { ip: '198.51.100.2' })).status, 429);   // that forgave none of theirs
+
+  // It has a limit of its own.
+  for (let i = 0; i < 10; i++) assert.equal((await logIn('besieged', `typo ${i}`, { ...home, cookie: browser })).status, 401);
+  assert.equal((await logIn('besieged', 'right password here', { ...home, cookie: browser })).status, 429);
+});
+
+test('changing the password forgets the browsers that signed in with the old one', async () => {
+  const mine = (await signUp('moving_on', 'old password here')).cookie;
+  const theirs = (await logIn('moving_on', 'old password here', { ip: '198.51.100.3' })).cookie;   // someone else who knew it
+  const change = await call('/auth/password', { method: 'PUT', cookie: mine, body: { current: 'old password here', password: 'new password here' } });
+  assert.equal(change.status, 200);
+
+  await besiege('moving_on', 20);
+  assert.equal((await logIn('moving_on', 'new password here', { ip: '198.51.100.3', cookie: theirs })).status, 429);
+  assert.equal((await logIn('moving_on', 'new password here', { cookie: mine })).status, 200);
 });
 
 test('changing the password needs the current one and signs out other sessions', async () => {

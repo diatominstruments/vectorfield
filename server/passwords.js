@@ -94,37 +94,54 @@ export async function pwnedCount(password, { fetch = globalThis.fetch, timeoutMs
  * How many tries are allowed. Failed password sign-ins, in 15 minutes: at
  * one account from one address (someone guessing), at one account from
  * anywhere (guessing spread across many addresses), and from one address
- * at any account (trying one password on many). New accounts, in an hour:
- * from one address. Requests that send an email, in an hour: about one
- * account, and from one address — so nobody's inbox can be flooded.
+ * at any account (trying one password on many) — except from a browser
+ * that has signed in to the account before, which is held only to a limit
+ * of its own (device), so guessing from elsewhere can't lock its owner out.
+ * New accounts, in an hour: from one address. Requests that send an email,
+ * in an hour: about one account, and from one address — so nobody's inbox
+ * can be flooded.
  */
 const LIMITS = {
-  login: { minutes: 15, pair: 5, account: 30, address: 30 },
+  login: { minutes: 15, pair: 5, account: 30, address: 30, device: 10 },
   signup: { minutes: 60, address: 10 },
   email: { minutes: 60, account: 5, address: 20 },
 };
 const KEEP = "interval '1 hour'";
 
-/** Whether `ip` (trying `username`, for a sign-in) has used up its tries. */
-export async function tooManyAttempts(db, kind, { username = null, ip }) {
+/**
+ * Take one of `ip`'s tries at `kind` (at `username`, for a sign-in; from
+ * `device`, a browser that has signed in to it before) ahead of the work
+ * it's for, or null if they're used up. Taken first, it counts at once, so
+ * requests sent all together can't each slip past the limit before any of
+ * them is counted. It stands as a used try unless given back with release().
+ */
+export async function claimAttempt(db, kind, { username = null, ip, device = null }) {
   const limit = LIMITS[kind];
-  const { rows } = await db.query(
-    `select count(*) filter (where username = $2 and ip = $3)::int as pair,
-            count(*) filter (where username = $2)::int as account,
-            count(*) filter (where ip = $3)::int as address
-     from auth_attempts
-     where kind = $1 and at > now() - make_interval(mins => $4) and (username = $2 or ip = $3)`,
-    [kind, username, ip, limit.minutes],
-  );
-  return ['pair', 'account', 'address'].some((k) => limit[k] && rows[0][k] >= limit[k]);
-}
-
-export async function recordAttempt(db, kind, { username = null, ip }) {
   await db.query(`delete from auth_attempts where at < now() - ${KEEP}`);
-  await db.query('insert into auth_attempts (kind, username, ip) values ($1, $2, $3)', [kind, username, ip]);
+  const { rows: [{ id }] } = await db.query(
+    'insert into auth_attempts (kind, username, ip, device) values ($1, $2, $3, $4) returning id',
+    [kind, username, ip, device],
+  );
+  const { rows: [n] } = await db.query(
+    `select count(*) filter (where device is null and username = $2 and ip = $3)::int as pair,
+            count(*) filter (where device is null and username = $2)::int as account,
+            count(*) filter (where device is null and ip = $3)::int as address,
+            count(*) filter (where device = $4 and username = $2)::int as device
+     from auth_attempts
+     where kind = $1 and at > now() - make_interval(mins => $5) and (username = $2 or ip = $3)`,
+    [kind, username, ip, device, limit.minutes],
+  );
+  const release = () => db.query('delete from auth_attempts where id = $1', [id]);
+  const over = device ? n.device > limit.device : ['pair', 'account', 'address'].some((k) => limit[k] && n[k] > limit[k]);
+  if (over) {
+    await release();   // a refused try isn't one
+    return null;
+  }
+  return { release };
 }
 
-/** After a right password: that account's earlier misses from there are forgiven. */
-export async function clearAttempts(db, kind, { username, ip }) {
-  await db.query('delete from auth_attempts where kind = $1 and username = $2 and ip = $3', [kind, username, ip]);
+/** After a right password: that account's earlier misses from there (this browser if it's a known one, or else this address) are forgiven. */
+export async function clearAttempts(db, kind, { username, ip, device = null }) {
+  const [where, from] = device ? ['device = $3', device] : ['device is null and ip = $3', ip];
+  await db.query(`delete from auth_attempts where kind = $1 and username = $2 and ${where}`, [kind, username, from]);
 }

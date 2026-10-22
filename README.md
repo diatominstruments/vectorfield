@@ -57,9 +57,15 @@ with. Passwords are kept only as Argon2id hashes (64 MiB, 3 passes) in
 their own table, never on `users`; ones found in known breaches are turned
 away (via Have I Been Pwned's k-anonymity API — only 5 hex digits of a
 SHA-1 leave the server; if it's unreachable, sign-up goes ahead); wrong
-guesses are limited per account and per address; and changing a password
-signs out every other session. Production sends HSTS. Behind a proxy, set
-`TRUST_PROXY` so the limits see visitors' real addresses.
+guesses are limited per account and per address, each try counted before
+the password's checked, so a burst sent all at once gets no more; and
+changing a password signs out every other session. A browser that has
+signed in to an account keeps a cookie saying so, and is held only to a
+limit of its own: guessing from elsewhere can use up an account's tries,
+but can't lock its owner out of a browser they've used. Changing or
+resetting the password forgets every other browser. Production sends HSTS.
+Behind a proxy, set `TRUST_PROXY` so the limits see visitors' real
+addresses.
 
 **Recovery email.** Off unless `RECOVERY_EMAIL=1`; until then nothing about
 email shows in the app, and a lost password can't be reset. Turned on, a
