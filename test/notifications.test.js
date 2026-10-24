@@ -30,6 +30,12 @@ test('the welcome links to the studio', () => {
   assert.ok(parts.some((p) => p.href === '/studio' && p.text === 'studio'));
 });
 
+test('a message says its own text, with or without a song', () => {
+  assert.equal(messageText({ kind: 'message', actor: null, song: null, message: 'Your song was taken down.' }), 'Vectorfield: Your song was taken down.');
+  assert.equal(showsCard({ kind: 'message', song: null }), false);
+  assert.equal(showsCard({ kind: 'message', song }), true);
+});
+
 test('only kinds about a song show it as a card', () => {
   assert.equal(showsCard({ kind: 'new_song', song }), true);
   assert.equal(showsCard({ kind: 'song_liked', song }), true);

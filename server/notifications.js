@@ -53,6 +53,7 @@ const item = (r) => ({
   kind: r.kind,
   createdAt: r.notified_at,
   readAt: r.read_at,
+  message: r.message ?? null,
   actor: r.actor_id ? { id: String(r.actor_id), username: r.actor_username, avatarUrl: r.actor_avatar } : null,
   song: r.id ? card(r) : null,
 });
@@ -74,7 +75,7 @@ export function notificationsRouter(db) {
     const before = /^\d+$/.test(req.query.before ?? '') ? req.query.before : null;
     if (before) params.push(before);
     const { rows } = await db.query(
-      `select n.id as notification_id, n.kind, n.created_at as notified_at, n.read_at,
+      `select n.id as notification_id, n.kind, n.message, n.created_at as notified_at, n.read_at,
          a.id as actor_id, a.username as actor_username, a.avatar_url as actor_avatar, x.*
        from notifications n
        left join users a on a.id = n.actor_id

@@ -410,6 +410,26 @@ test('notifications: a welcome, likes, new songs from people you follow, new fol
   assert.equal((await fetch(`${base}/notifications`)).status, 401);
 });
 
+test('messages written by hand: each one counts, and comes with its text and song', async () => {
+  const api = await signIn('Message Reader');
+  const { id: userId } = (await api('/auth/me')).body.user;
+  const { id: songId } = (await api('/songs', { method: 'POST', body: { title: 'Flagged' } })).body.song;
+  const send = (message, song = null) => db.query(
+    "insert into notifications (user_id, kind, song_id, message) values ($1, 'message', $2, $3) on conflict do nothing",
+    [userId, song, message],
+  );
+  await send('Hello');
+  await send('Hello again');
+  await send('About this one', songId);
+  const list = (await api('/notifications')).body.notifications;
+  assert.deepEqual(list.map((n) => [n.kind, n.message, n.song?.id ?? null]), [
+    ['message', 'About this one', songId], ['message', 'Hello again', null], ['message', 'Hello', null], ['welcome', null, null],
+  ]);
+  // Notifications without text are still one per thing.
+  await db.query("insert into notifications (user_id, kind) values ($1, 'welcome') on conflict do nothing", [userId]);
+  assert.equal((await api('/notifications')).body.notifications.length, 4);
+});
+
 test('notifications page by id, newest first', async () => {
   const maker = await signIn('Busy Maker');
   const fan = await signIn('Keen Fan');

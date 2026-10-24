@@ -3,7 +3,7 @@
  *
  * A notification is a row (server/notifications.js) with a kind, the user
  * it's for, and what it's about: the `actor` who did something, the `song`
- * it concerns, or both. Everything a kind says is here, so changing the
+ * it concerns, or both — or, for a message sent by hand, its own text. Everything a kind says is here, so changing the
  * wording is one edit in one place — and since the wording is put together
  * on display, it changes for old notifications too.
  *
@@ -11,7 +11,8 @@
  *   icon     a glyph shown beside it
  *   message  the notification as a list of parts: plain strings, `actor`
  *            (shown as a link to their profile), `song` (a link to its
- *            page), or link(text, href) for any other link
+ *            page), or link(text, href) for any other link; it's given
+ *            { actor, song, message }
  *   card     true to show the song it's about beneath the message, as a
  *            feed card
  */
@@ -43,6 +44,14 @@ export const NOTIFICATIONS = {
     icon: '+',
     message: ({ actor }) => [actor, ' started following you'],
   },
+
+  // Written by hand in the admin backend, sometimes about a song (one that
+  // was taken down, say), which then shows beneath it.
+  message: {
+    icon: '✉',
+    message: ({ message }) => ['Vectorfield: ', message],
+    card: true,
+  },
 };
 
 export const KINDS = Object.keys(NOTIFICATIONS);
@@ -58,7 +67,7 @@ export function messageParts(n) {
   if (!template) return [{ text: 'Something happened' }];
   const actor = n.actor ?? { username: 'someone' };
   const song = n.song ?? { title: 'a song' };
-  return template.message({ actor, song }).map((part) => {
+  return template.message({ actor, song, message: n.message ?? '' }).map((part) => {
     if (typeof part === 'string') return { text: part };
     if (part === actor) return { text: actor.username, href: actor.id ? `/u/${actor.username}` : undefined };
     if (part === song) return { text: song.title, href: song.id ? `/s/${song.id}` : undefined };
