@@ -126,6 +126,7 @@ shared/song.js     the song document format and its validation — both sides us
 shared/bounce.js, shared/tubules.js, shared/ants.js, shared/fireflies.js, shared/bees.js, shared/frogs.js, shared/sandpile.js, shared/lilypond.js
                    each generative sequencer's settings and their validation
 shared/visuals.js  validation for the visual side: looks and the kit's signal-spec language
+shared/timing.js   the song's beats, sections and energy, worked out from the doc for the kit's timing
 shared/genres.js   the electronic music taxonomy (families → genres) used for tags
 shared/users.js    username and profile rules
 shared/notifications.js  every kind of notification: its icon and wording, in one place

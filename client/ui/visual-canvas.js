@@ -42,34 +42,54 @@ export function songTimeline(doc) {
  * (monitor: false) and follows the engine's song position; while stopped it
  * holds at `holdTime.current`, so a still frame of that moment shows.
  *
- * `timeline` and `look` are pushed only when they really change: setStyle
- * snaps the live style, which would cut short the kit's own easing between
- * blocks if it ran on every render.
+ * `analysis` is the song's timing (see shared/timing.js), which the kit
+ * can't work out from a live node itself; without it the kit estimates the
+ * beat as it plays.
+ *
+ * `timeline`, `look` and `analysis` are pushed only when they really
+ * change: setStyle snaps the live style, which would cut short the kit's
+ * own easing between blocks if it ran on every render.
  */
-export function VisualCanvas({ engine, timeline, look, holdTime, class: className = 'preview', onClick }) {
+export function VisualCanvas({ engine, timeline, look, analysis = null, holdTime, class: className = 'preview', onClick }) {
   const canvasRef = useRef();
   const kitRef = useRef(null);
-  const applied = useRef({ timeline: null, look: null });
+  const applied = useRef({ timeline: null, look: null, analysis: null });
+  const analysisRef = useRef(analysis);
+  analysisRef.current = analysis;
 
   useEffect(() => {
     const ctx = engine.ensureContext();
-    const kit = new GloamingKit({ canvas: canvasRef.current, audioContext: ctx, monitor: false, three: THREE, enable3D: has3D });
+    // No analysis of its own: a live node has nothing to decode.
+    const kit = new GloamingKit({ canvas: canvasRef.current, audioContext: ctx, monitor: false, three: THREE, enable3D: has3D, analyze: false });
+    kitRef.current = kit;
+    applied.current = { timeline: null, look: null, analysis: null };
     kit.load({
       node: engine.output,
       clock: {
         get currentTime() { return engine.songTime ?? holdTime.current; },
         get playing() { return engine.playing; },
       },
+    }).then(() => {
+      // Loading clears the analysis, so it goes in once loaded.
+      if (kitRef.current !== kit) return;
+      kit.setAnalysis(analysisRef.current);
+      applied.current.analysis = JSON.stringify(analysisRef.current);
     });
     kit.startLoop();
-    kitRef.current = kit;
-    applied.current = { timeline: null, look: null };
-    return () => kit.dispose();
+    return () => {
+      kitRef.current = null;
+      kit.dispose();
+    };
   }, [engine]);
 
   useEffect(() => {
     const kit = kitRef.current;
     if (!kit) return;
+    const a = JSON.stringify(analysis);
+    if (applied.current.analysis !== null && a !== applied.current.analysis) {
+      kit.setAnalysis(analysis);
+      applied.current.analysis = a;
+    }
     const t = JSON.stringify(timeline);
     if (t !== applied.current.timeline) {
       kit.setTimeline(JSON.parse(t));

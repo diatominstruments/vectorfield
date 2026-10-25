@@ -4,6 +4,7 @@ import { html, hue, useEngineEvent } from '../lib.js';
 import { blockTimes, newId, newVisual, stylesInEffect, transitionsInEffect, visualsInEffect } from '../../shared/song.js';
 import { VISUAL_LIMITS } from '../../shared/visuals.js';
 import { VisualPanel, LookPanel, TransitionPanel, hasSettings, vizLabel } from './visual-config.js';
+import { songAnalysis } from '../../shared/timing.js';
 import { VisualCanvas, songTimeline } from './visual-canvas.js';
 import { fmtTime } from './song-view.js';
 import { NO_3D_HINT, has3D, needs3D } from '../three.js';
@@ -29,7 +30,8 @@ function previewDoc(doc, browse) {
  */
 function Preview({ store, engine, previewTime, browse }) {
   const doc = previewDoc(store.doc, browse);
-  return html`<${VisualCanvas} engine=${engine} timeline=${songTimeline(doc)} look=${store.doc.look} holdTime=${previewTime} />`;
+  return html`<${VisualCanvas} engine=${engine} timeline=${songTimeline(doc)} look=${store.doc.look} analysis=${songAnalysis(store.doc)}
+    holdTime=${previewTime} />`;
 }
 
 // What Copy took: the visuals and look one block shows, kept for the

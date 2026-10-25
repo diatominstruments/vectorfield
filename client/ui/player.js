@@ -3,6 +3,7 @@ import { html, Link, hue, useEngineEvent, useTitle } from '../lib.js';
 import { api } from '../api.js';
 import { Engine } from '../engine.js';
 import { normalizeSong, blockTimes, playOrder, sections as songSections } from '../../shared/song.js';
+import { songAnalysis } from '../../shared/timing.js';
 import { VisualCanvas, songTimeline } from './visual-canvas.js';
 import { TagChips } from './genre-picker.js';
 import { fmtTime } from './song-view.js';
@@ -48,6 +49,7 @@ export function useSongPlayback(song) {
   // saved, so it plays with today's instruments.
   const doc = useMemo(() => normalizeSong(song.doc), [song]);
   const timeline = useMemo(() => songTimeline(doc), [doc]);
+  const analysis = useMemo(() => songAnalysis(doc), [doc]);
   const times = useMemo(() => blockTimes(doc), [doc]);
   const sections = useMemo(() => songSections(doc), [doc]);
   const order = playOrder(doc);
@@ -78,14 +80,14 @@ export function useSongPlayback(song) {
   const patternIndex = new Map(doc.patterns.map((p, i) => [p.id, i]));
 
   return {
-    engine, doc, timeline, times, sections, order, total, holdTime, played, playing, playingIndex, section,
+    engine, doc, timeline, analysis, times, sections, order, total, holdTime, played, playing, playingIndex, section,
     play, toggle, canPlay, patternIndex,
   };
 }
 
 function Player({ song, user }) {
   const {
-    engine, doc, timeline, times, sections, order, total, holdTime, played, playing, playingIndex, section,
+    engine, doc, timeline, analysis, times, sections, order, total, holdTime, played, playing, playingIndex, section,
     play, toggle, canPlay, patternIndex,
   } = useSongPlayback(song);
   const stageRef = useRef();
@@ -94,7 +96,7 @@ function Player({ song, user }) {
   return html`
     <main class="song-page">
       <div ref=${stageRef} class=${`stage ${full ? 'full' : ''} ${full && idle && playing ? 'idle' : ''}`} onPointerMove=${onPointerMove}>
-        <${VisualCanvas} engine=${engine} timeline=${timeline} look=${doc.look} holdTime=${holdTime} class="stage-canvas"
+        <${VisualCanvas} engine=${engine} timeline=${timeline} look=${doc.look} analysis=${analysis} holdTime=${holdTime} class="stage-canvas"
           onClick=${canPlay ? toggle : undefined} />
         ${section?.name && html`<span key=${section.from} class="stage-section" aria-live="polite">${section.name}</span>`}
         ${!playing && html`

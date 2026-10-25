@@ -4,6 +4,7 @@ import { api } from '../api.js';
 import { TAG_LIMITS, tagsForBpm } from '../../shared/genres.js';
 import { coverPath } from '../../shared/embed.js';
 import { GenrePicker } from './genre-picker.js';
+import { songAnalysis } from '../../shared/timing.js';
 import { VisualCanvas, songTimeline } from './visual-canvas.js';
 import { frameAsCover } from './share.js';
 
@@ -121,7 +122,7 @@ function CoverPicker({ store, engine, value, published, onChange }) {
   return html`
     <div class="cover-picker">
       <div class="cover-live" ref=${liveRef}>
-        <${VisualCanvas} engine=${engine} timeline=${songTimeline(store.doc)} look=${store.doc.look} holdTime=${holdTime}
+        <${VisualCanvas} engine=${engine} timeline=${songTimeline(store.doc)} look=${store.doc.look} analysis=${songAnalysis(store.doc)} holdTime=${holdTime}
           class="cover-canvas" />
         <div class="cover-actions">
           <button class=${`play ${playing ? 'on' : ''}`} disabled=${!canPlay}
