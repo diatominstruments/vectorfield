@@ -1,9 +1,10 @@
-import { BANDS, BLENDS, CLIPS, DEFAULT_TRIGGERS, Glyph, TRANSITIONS, catalog, describe } from 'gloaming-kit';
+import { BANDS, BLENDS, CLIPS, DEFAULT_TRIGGERS, Glyph, TIMING_TRIGGERS, TRANSITIONS, catalog, describe } from 'gloaming-kit';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { html } from '../lib.js';
 import { NO_3D_HINT, needs3D } from '../three.js';
 import {
-  STYLE_KEYS, DEFAULT_LOOK, DEFAULT_FADE, HOLD_PICKS, LFO_SHAPES, MAX_FADE, PLACE_DEFAULTS, VISUAL_LIMITS, normalizePlace,
+  STYLE_KEYS, DEFAULT_LOOK, DEFAULT_FADE, HOLD_PICKS, LFO_SHAPES, MAX_FADE, MOMENTS, PLACE_DEFAULTS, TIMBRE_NAMES, VISUAL_LIMITS,
+  normalizePlace,
 } from '../../shared/visuals.js';
 
 // ---- names -------------------------------------------------------------------
@@ -19,8 +20,17 @@ const TRIGGERS = DEFAULT_TRIGGERS.map((t) => t.name);
 const TRIGGER_LABELS = {
   sub: 'Sub drop', bass: 'Bass hit', tom: 'Tom hit', snare: 'Snare hit', clap: 'Clap hit', hihat: 'Hi-hat hit',
   onset: 'Any hit', loud: 'Loud surge', lull: 'Quiet passage',
+  beat: 'Each beat', downbeat: 'Downbeat', phrase: 'Phrase start', section: 'Section change', drop: 'Drop',
 };
 const triggerLabel = (t) => TRIGGER_LABELS[t] ?? `${t} hit`;
+
+// Measures of the sound's colour, read like a band.
+const TIMBRE_LABELS = { centroid: 'Brightness', flatness: 'Noisiness' };
+const TIMBRE_HINTS = {
+  centroid: 'How bright the sound is: low for dark pads, high for hats and air. Jumpy, so give it some smoothing',
+  flatness: 'How noisy rather than tonal the sound is: low for pure tones, rising with hats, crashes and distortion',
+};
+const timbreLabel = (t) => TIMBRE_LABELS[t] ?? t;
 
 const STYLE_LABELS = {
   background: 'Background', lineColor: 'Line', accentColor: 'Accent', peakColor: 'Peak',
@@ -76,6 +86,26 @@ const RESPONSE_HINTS = {
 };
 const PICKS = { random: 'Random', impact: 'Hit strength', cycle: 'Steps in turn', toggle: 'On, off' };
 const SHAPES = { sine: 'Sine', triangle: 'Triangle', saw: 'Saw', square: 'Square' };
+const FALLS = { linear: 'Steady', exp: 'Fast, then trailing', smooth: 'Eased', spring: 'Spring' };
+const FALL_HINTS = {
+  linear: 'Falls at a steady rate',
+  exp: 'Falls fast, then trails off',
+  smooth: 'Eases away and settles',
+  spring: 'Overshoots below zero and rings to rest, like something struck',
+};
+
+// The song's own time (see shared/timing.js): its beats, bars, phrases,
+// sections and drops, known ahead rather than heard.
+const TIMING_SOURCES = { beat: 'Beat cycle', pulse: 'Pulse', rise: 'Build-up', energy: 'Energy' };
+const TIMING_HINTS = {
+  beat: 'Climbs from 0 to 1 through each beat, bar or phrase, in time with the song',
+  pulse: 'Jumps to 1 on each beat, bar or section and falls away. Never late: the song knows where its beats fall',
+  rise: 'Climbs to 1 in the seconds before the next drop or section, then lets go',
+  energy: 'How full the song is here, against its fullest',
+};
+const CYCLES = { 1: 'Beat', 2: 'Half bar', 4: 'Bar', 8: 'Two bars', 16: 'Phrase' };
+const MOMENT_LABELS = { beat: 'Beat', bar: 'Bar', phrase: 'Phrase', section: 'Section', drop: 'Drop' };
+const ENERGY_OF = { song: 'Moment to moment', section: 'Whole section' };
 const MODIFIERS = ['invert', 'smooth', 'curve', 'gain', 'offset', 'quantize', 'clamp'];
 
 const modsOf = (spec) => ({
@@ -88,21 +118,36 @@ function readLevel(spec) {
   if (typeof spec === 'string') {
     if (spec === 'rms') return { source: 'rms', measure: 'level' };
     if (spec in BANDS) return { source: `band:${spec}`, measure: 'level' };
+    if (TIMBRE_NAMES.includes(spec)) return { source: `timbre:${spec}`, measure: 'level' };
   }
   if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return { source: 'custom' };
 
-  const level = (name, measure) => ({ source: name === 'rms' ? 'rms' : `band:${name}`, measure });
+  const level = (name, measure) => ({
+    source: name === 'rms' ? 'rms' : TIMBRE_NAMES.includes(name) ? `timbre:${name}` : `band:${name}`, measure,
+  });
   let form;
   let own;   // the keys the form has a control for, besides the modifiers
   if (spec.band !== undefined) [form, own] = [level(spec.band, 'level'), ['band']];
   else if (spec.relative !== undefined) [form, own] = [level(spec.relative, 'relative'), ['relative']];
   else if (spec.intensity !== undefined) [form, own] = [level(spec.intensity, 'intensity'), ['intensity']];
   else if (spec.trigger !== undefined) {
-    [form, own] = [{ source: `trigger:${spec.trigger}`, response: 'envelope', decay: spec.decay ?? 3 }, ['trigger', 'decay']];
+    [form, own] = [{
+      source: `trigger:${spec.trigger}`, response: 'envelope', decay: spec.decay ?? 3, attack: spec.attack ?? 0, fall: spec.shape ?? 'linear',
+    }, ['trigger', 'decay', 'attack', 'shape']];
   } else if (spec.hold !== undefined && (spec.pick === undefined || HOLD_PICKS.includes(spec.pick))) {
     [form, own] = [{ source: `trigger:${spec.hold}`, response: 'hold', pick: spec.pick ?? 'random', steps: spec.steps ?? 4 }, ['hold', 'pick', 'steps']];
   } else if (spec.lfo !== undefined) [form, own] = [{ source: 'lfo', rate: spec.lfo, shape: spec.shape ?? 'sine' }, ['lfo', 'shape']];
   else if (spec.progress) [form, own] = [{ source: 'progress' }, ['progress']];
+  else if (String(spec.beat) in CYCLES) [form, own] = [{ source: 'beat', cycle: spec.beat, shape: spec.shape ?? 'saw' }, ['beat', 'shape']];
+  else if (MOMENTS.includes(spec.pulse)) {
+    [form, own] = [{
+      source: 'pulse', on: spec.pulse, decay: spec.decay ?? 8, attack: spec.attack ?? 0, accent: Boolean(spec.accent),
+    }, ['pulse', 'decay', 'attack', 'accent']];
+  } else if (MOMENTS.includes(spec.rise)) {
+    [form, own] = [{
+      source: 'rise', into: spec.rise, seconds: spec.seconds ?? 4, ease: spec.ease ?? 2, release: spec.release ?? 0.5,
+    }, ['rise', 'seconds', 'ease', 'release']];
+  } else if (spec.energy !== undefined) [form, own] = [{ source: 'energy', of: spec.energy === 'section' ? 'section' : 'song' }, ['energy']];
   else if (spec.const !== undefined && Object.keys(spec).length === 1) return { source: 'const', value: spec.const };
   else if (Array.isArray(spec.sum) && spec.sum.length === 1 && spec.sum[0] === 'rms') [form, own] = [level('rms', 'level'), ['sum']];
   else return { source: 'custom' };
@@ -119,6 +164,8 @@ function writeLevel(form) {
     const measure = form.measure ?? 'level';
     if (measure !== 'level') spec = { [measure]: kind === 'rms' ? 'rms' : name };
     else spec = kind === 'rms' ? { sum: ['rms'] } : { band: name };
+  } else if (kind === 'timbre') {
+    spec = { band: name };
   } else if (kind === 'trigger') {
     if (form.response === 'hold') {
       spec = { hold: name };
@@ -126,12 +173,28 @@ function writeLevel(form) {
       if (form.pick === 'cycle') spec.steps = form.steps ?? 4;
     } else {
       spec = { trigger: name, decay: form.decay ?? 3 };
+      if (form.attack) spec.attack = form.attack;
+      if (form.fall && form.fall !== 'linear') spec.shape = form.fall;
     }
   } else if (kind === 'lfo') {
     spec = { lfo: form.rate ?? 0.1 };
     if (form.shape && form.shape !== 'sine') spec.shape = form.shape;
   } else if (kind === 'progress') {
     spec = { progress: true };
+  } else if (kind === 'beat') {
+    spec = { beat: Number(form.cycle ?? 4) };
+    if (form.shape && form.shape !== 'saw') spec.shape = form.shape;
+  } else if (kind === 'pulse') {
+    const on = form.on ?? 'beat';
+    spec = { pulse: on, decay: form.decay ?? 8 };
+    if (form.attack) spec.attack = form.attack;
+    if (form.accent && on === 'beat') spec.accent = true;
+  } else if (kind === 'rise') {
+    spec = { rise: form.into ?? 'drop', seconds: form.seconds ?? 4 };
+    if (form.ease !== undefined && form.ease !== 2) spec.ease = form.ease;
+    if (form.release !== undefined && form.release !== 0.5) spec.release = form.release;
+  } else if (kind === 'energy') {
+    spec = { energy: form.of === 'section' ? 'section' : true };
   } else {
     return null;
   }
@@ -150,7 +213,12 @@ function writeLevel(form) {
 /** The source a spec part reads, briefly: 'Treble', 'Snare', 'Song position'. */
 function sourceName(spec) {
   if (typeof spec === 'number') return String(spec);
-  if (typeof spec === 'string') return spec === 'rms' ? 'Loudness' : spec in BANDS ? bandLabel(spec) : triggerLabel(spec).replace(/ hit$/, '');
+  if (typeof spec === 'string') {
+    if (spec === 'rms') return 'Loudness';
+    if (spec in BANDS) return bandLabel(spec);
+    if (TIMBRE_NAMES.includes(spec)) return timbreLabel(spec);
+    return triggerLabel(spec).replace(/ hit$/, '');
+  }
   if (Array.isArray(spec)) return describeSpec({ sum: spec });
   if (!spec || typeof spec !== 'object') return 'Custom';
   const name = spec.band ?? spec.relative ?? spec.intensity;
@@ -159,6 +227,10 @@ function sourceName(spec) {
   if (spec.const !== undefined) return String(spec.const);
   if (spec.lfo !== undefined) return 'Oscillator';
   if (spec.progress) return 'Song position';
+  if (spec.beat !== undefined) return `${CYCLES[spec.beat] ?? `${spec.beat}-beat`} cycle`;
+  if (spec.pulse !== undefined) return `${MOMENT_LABELS[spec.pulse] ?? `${spec.pulse}-beat`} pulse`;
+  if (spec.rise !== undefined) return `Build-up to ${(MOMENT_LABELS[spec.rise] ?? spec.rise).toLowerCase()}`;
+  if (spec.energy !== undefined) return spec.energy === 'section' ? 'Section energy' : 'Energy';
   return describeSpec(spec);
 }
 
@@ -237,7 +309,7 @@ function LevelSlot({ slot, def, spec, defaultLabel, onChange }) {
   const change = (patch) => onChange(writeLevel({ ...form, ...patch }));
 
   // Moving between bands keeps the measure and shaping, and between hits the response.
-  const family = (source) => (source === 'rms' || source.startsWith('band:') ? 'sound' : source.split(':')[0]);
+  const family = (source) => (source === 'rms' || source.startsWith('band:') || source.startsWith('timbre:') ? 'sound' : source.split(':')[0]);
   const pick = (source) => {
     if (source === 'default') return onChange(undefined);
     if (source === 'custom') return;
@@ -255,8 +327,17 @@ function LevelSlot({ slot, def, spec, defaultLabel, onChange }) {
             ${Object.keys(BANDS).map((b) => html`<option value=${`band:${b}`}>${bandLabel(b)}</option>`)}
           </optgroup>
           <option value="rms">Loudness</option>
+          <optgroup label="Sound colour">
+            ${TIMBRE_NAMES.map((t) => html`<option value=${`timbre:${t}`} title=${TIMBRE_HINTS[t]}>${timbreLabel(t)}</option>`)}
+          </optgroup>
           <optgroup label="Hits">
             ${TRIGGERS.map((t) => html`<option value=${`trigger:${t}`}>${triggerLabel(t)}</option>`)}
+          </optgroup>
+          <optgroup label="Song moments">
+            ${TIMING_TRIGGERS.map((t) => html`<option value=${`trigger:${t}`}>${triggerLabel(t)}</option>`)}
+          </optgroup>
+          <optgroup label="In time with the song">
+            ${Object.entries(TIMING_SOURCES).map(([v, text]) => html`<option value=${v} title=${TIMING_HINTS[v]}>${text}</option>`)}
           </optgroup>
           <optgroup label="Moves on its own">
             <option value="lfo">Slow oscillator</option>
@@ -271,7 +352,9 @@ function LevelSlot({ slot, def, spec, defaultLabel, onChange }) {
       ${kind === 'trigger' && html`
         <${Choice} label="response" value=${form.response} options=${RESPONSES} titles=${RESPONSE_HINTS} onChange=${(response) => change({ response })} />`}
       ${kind === 'trigger' && form.response === 'envelope' && html`
-        <${Slider} label="decay" min="0.5" max="12" step="0.1" value=${form.decay} unit="/s" onInput=${(decay) => change({ decay })} />`}
+        <${Slider} label="decay" min="0.5" max="12" step="0.1" value=${form.decay} unit="/s" onInput=${(decay) => change({ decay })} />
+        <${Choice} label="fall" value=${form.fall} options=${FALLS} titles=${FALL_HINTS} onChange=${(fall) => change({ fall })} />
+        <${Slider} label="attack" min="0" max="1" step="0.01" value=${form.attack} unit="s" onInput=${(attack) => change({ attack })} />`}
       ${kind === 'trigger' && form.response === 'hold' && html`
         <${Choice} label="new value" value=${form.pick} options=${PICKS} onChange=${(p) => change({ pick: p })} />
         ${form.pick === 'cycle' && html`
@@ -279,6 +362,23 @@ function LevelSlot({ slot, def, spec, defaultLabel, onChange }) {
       ${kind === 'lfo' && html`
         <${Slider} label="rate" min="0.01" max="2" step="0.01" value=${form.rate} unit=" Hz" onInput=${(rate) => change({ rate })} />
         <${Choice} label="shape" value=${form.shape} options=${SHAPES} onChange=${(shape) => change({ shape })} />`}
+      ${kind === 'beat' && html`
+        <${Choice} label="each" value=${form.cycle} options=${CYCLES} onChange=${(cycle) => change({ cycle })} />
+        <${Choice} label="shape" value=${form.shape} options=${SHAPES} onChange=${(shape) => change({ shape })} />`}
+      ${kind === 'pulse' && html`
+        <${Choice} label="each" value=${form.on} options=${MOMENT_LABELS} onChange=${(on) => change({ on })} />
+        <${Slider} label="decay" min="1" max="20" step="0.5" value=${form.decay} unit="/s" onInput=${(decay) => change({ decay })} />
+        <${Slider} label="lead-in" min="0" max="2" step="0.01" value=${form.attack} unit="s" onInput=${(attack) => change({ attack })} />
+        ${form.on === 'beat' && html`
+          <${Toggle} label="accent" checked=${form.accent} title="Bigger on the beats that land harder"
+            onChange=${(accent) => change({ accent })} />`}`}
+      ${kind === 'rise' && html`
+        <${Choice} label="into" value=${form.into} options=${MOMENT_LABELS} onChange=${(into) => change({ into })} />
+        <${Slider} label="length" min="0.5" max="16" step="0.5" value=${form.seconds} unit="s" onInput=${(seconds) => change({ seconds })} />
+        <${Slider} label="ease" min="0.5" max="4" step="0.1" value=${form.ease} onInput=${(ease) => change({ ease })} />
+        <${Slider} label="release" min="0" max="2" step="0.05" value=${form.release} unit="s" onInput=${(release) => change({ release })} />`}
+      ${kind === 'energy' && html`
+        <${Choice} label="of" value=${form.of} options=${ENERGY_OF} onChange=${(of) => change({ of })} />`}
       ${kind === 'const' && html`
         <${Slider} label="value" min="0" max="1" value=${form.value ?? 0.5} onInput=${(value) => change({ value })} />`}
       ${live && html`
@@ -297,7 +397,12 @@ function EventSlot({ slot, def, spec, onChange }) {
         <select value=${spec === undefined ? 'default' : eventName(spec)} aria-label=${`${slot} trigger`}
           onChange=${(e) => onChange(e.target.value === 'default' ? undefined : e.target.value)}>
           <option value="default">Default (${triggerLabel(eventName(def.default))})</option>
-          ${TRIGGERS.map((t) => html`<option value=${t}>${triggerLabel(t)}</option>`)}
+          <optgroup label="Hits">
+            ${TRIGGERS.map((t) => html`<option value=${t}>${triggerLabel(t)}</option>`)}
+          </optgroup>
+          <optgroup label="Song moments">
+            ${TIMING_TRIGGERS.map((t) => html`<option value=${t}>${triggerLabel(t)}</option>`)}
+          </optgroup>
         </select>
       </label>
     </div>`;

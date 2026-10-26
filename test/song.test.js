@@ -83,6 +83,48 @@ test('visuals: signal specs stay inside the closed language', () => {
   }
 });
 
+test("visuals: the song's timing, the sound's colour, and shaped envelopes", () => {
+  const song = sampleSong();
+  const [block] = song.arrangement;
+  const bind = {
+    a: { beat: 4, shape: 'sine' },
+    b: { pulse: 'beat', decay: 6, attack: 0.05, accent: true },
+    c: { pulse: 8 },
+    d: { rise: 'drop', seconds: 4, ease: 2, release: 0.5 },
+    e: { energy: true },
+    f: { energy: 'section', smooth: 1 },
+    g: 'centroid',
+    h: { band: 'flatness', smooth: 0.4 },
+    i: { trigger: 'snare', decay: 3, attack: 0.04, shape: 'spring' },
+    j: { trigger: 'drop', decay: 1 },
+    k: { hold: 'downbeat', pick: 'cycle', steps: 4 },
+    l: 'phrase',
+  };
+  block.visuals[0].bind = structuredClone(bind);
+  assert.deepEqual(normalizeSong(song).arrangement[0].visuals[0].bind, bind);
+
+  block.visuals[0].bind = {
+    a: { beat: 500, shape: 'exp' },
+    b: { pulse: 0, accent: 'yes', attack: 9 },
+    c: { trigger: 'bass', shape: 'wobble' },
+    d: { rise: 'section', seconds: 1000 },
+  };
+  assert.deepEqual(normalizeSong(song).arrangement[0].visuals[0].bind, {
+    a: { beat: 64 },
+    b: { pulse: 0.25, attack: 4 },
+    c: { trigger: 'bass' },
+    d: { rise: 'section', seconds: 60 },
+  });
+
+  for (const bad of [
+    { beat: 'bar' }, { pulse: 'chorus' }, { rise: 'beatdrop' }, { rise: 4 }, { energy: 'loud' }, { energy: 1 },
+    { relative: 'centroid' }, { trigger: 'centroid' }, { hold: 'bar' }, 'bar',
+  ]) {
+    block.visuals[0].bind = { swell: bad };
+    assert.throws(() => normalizeSong(song), SongError, JSON.stringify(bad));
+  }
+});
+
 test('visuals: grid options keep their drawing, bounded', () => {
   const song = sampleSong();
   const [block] = song.arrangement;

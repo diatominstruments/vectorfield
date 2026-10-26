@@ -26,11 +26,13 @@
 
 import { SongError } from './errors.js';
 
-// Mirrors of the kit's BANDS, DEFAULT_TRIGGERS, CLIPS, BLENDS and
-// TRANSITIONS. The editor reads the real ones from the kit; these only
-// bound what a saved song may name.
+// Mirrors of the kit's BANDS, DEFAULT_TRIGGERS, TIMING_TRIGGERS, CLIPS,
+// BLENDS and TRANSITIONS. The editor reads the real ones from the kit; these
+// only bound what a saved song may name.
 export const BAND_NAMES = ['subBass', 'bass', 'lowMid', 'mid', 'highMid', 'treble'];
 export const TRIGGER_NAMES = ['sub', 'bass', 'tom', 'snare', 'clap', 'hihat', 'onset', 'loud', 'lull'];
+// Fired by the song's timing rather than heard, and always available.
+export const TIMING_TRIGGER_NAMES = ['beat', 'downbeat', 'phrase', 'section', 'drop'];
 export const CLIP_NAMES = ['rect', 'circle', 'ellipse', 'left', 'right', 'top', 'bottom', 'none'];
 export const BLEND_NAMES = [
   'source-over', 'source-in', 'source-out', 'source-atop',
@@ -43,6 +45,12 @@ export const TRANSITION_NAMES = ['fade', 'cut', 'wipe-left', 'wipe-right', 'wipe
 // The kit's lfo shapes and hold picks, which aren't exported.
 export const LFO_SHAPES = ['sine', 'triangle', 'saw', 'square'];
 export const HOLD_PICKS = ['random', 'impact', 'cycle', 'toggle'];
+// Nor are these: measures of the sound's colour, read like a band; how a
+// trigger envelope falls; and the moments of the song's timing that pulses
+// and rises land on.
+export const TIMBRE_NAMES = ['centroid', 'flatness'];
+export const ENVELOPE_SHAPES = ['linear', 'exp', 'smooth', 'spring'];
+export const MOMENTS = ['beat', 'bar', 'phrase', 'section', 'drop'];
 
 export const VISUAL_LIMITS = Object.freeze({
   perBlock: 6, bindSlots: 16, options: 24, optionLength: 120, specDepth: 4, specParts: 8, gridSize: 32,
@@ -101,15 +109,20 @@ export function normalizeStyle(style, { complete = false } = {}) {
   return Object.keys(out).length ? out : null;
 }
 
-// Numeric keys a spec object may carry, bounded. `decay` shapes a trigger
-// envelope; `rate`-like keys belong to their source but are bounded here too.
+// Numeric keys a spec object may carry, bounded. `decay` and `attack` shape
+// a trigger envelope or pulse; `rate`-like keys belong to their source but
+// are bounded here too.
 const MODIFIERS = {
   smooth: [0, 5], curve: [0.1, 8], gain: [-10, 10], offset: [-10, 10], quantize: [0, 64], decay: [0.1, 50],
   phase: [0, 1], seed: [0, 9999], steps: [2, 64], initial: [-10, 10],
+  attack: [0, 4], seconds: [0.05, 60], ease: [0.1, 8], release: [0, 10],
 };
 const COMBINERS = ['sum', 'max', 'min', 'mul'];
+// Beats in a cycle of `beat`, or between numbered pulses.
+const BEATS = [0.25, 64];
 const isNum = (x) => typeof x === 'number' && Number.isFinite(x);
 const isLevelName = (x) => x === 'rms' || BAND_NAMES.includes(x);
+const isEventName = (x) => TRIGGER_NAMES.includes(x) || TIMING_TRIGGER_NAMES.includes(x);
 
 /** A level or event spec, in the kit's closed language. Throws on anything else. */
 export function normalizeSpec(spec, depth = 0) {
@@ -119,7 +132,7 @@ export function normalizeSpec(spec, depth = 0) {
     return clampNum(spec, -10, 10);
   }
   if (typeof spec === 'string') {
-    if (isLevelName(spec) || TRIGGER_NAMES.includes(spec)) return spec;
+    if (isLevelName(spec) || TIMBRE_NAMES.includes(spec) || isEventName(spec)) return spec;
     throw new SongError(`unknown signal '${spec.slice(0, 20)}'`);
   }
   if (Array.isArray(spec)) {
@@ -130,11 +143,13 @@ export function normalizeSpec(spec, depth = 0) {
 
   const out = {};
   const combiner = COMBINERS.find((key) => Array.isArray(spec[key]));
-  if (typeof spec.band === 'string' && BAND_NAMES.includes(spec.band)) out.band = spec.band;
+  if (BAND_NAMES.includes(spec.band) || TIMBRE_NAMES.includes(spec.band)) out.band = spec.band;
   else if (isLevelName(spec.relative)) out.relative = spec.relative;
   else if (isLevelName(spec.intensity)) out.intensity = spec.intensity;
-  else if (typeof spec.trigger === 'string' && TRIGGER_NAMES.includes(spec.trigger)) out.trigger = spec.trigger;
-  else if (isNum(spec.const)) out.const = clampNum(spec.const, -10, 10);
+  else if (isEventName(spec.trigger)) {
+    out.trigger = spec.trigger;
+    if (ENVELOPE_SHAPES.includes(spec.shape)) out.shape = spec.shape;
+  } else if (isNum(spec.const)) out.const = clampNum(spec.const, -10, 10);
   else if (combiner) {
     if (spec[combiner].length > VISUAL_LIMITS.specParts) throw new SongError('signal list too long');
     out[combiner] = spec[combiner].map((s) => normalizeSpec(s, depth + 1));
@@ -143,11 +158,21 @@ export function normalizeSpec(spec, depth = 0) {
     if (LFO_SHAPES.includes(spec.shape)) out.shape = spec.shape;
   } else if (spec.progress === true) {
     out.progress = true;
-  } else if (typeof spec.hold === 'string' && TRIGGER_NAMES.includes(spec.hold)) {
+  } else if (isEventName(spec.hold)) {
     out.hold = spec.hold;
     // A pick is one of the named ways, or a level spec read at the hit.
     if (HOLD_PICKS.includes(spec.pick)) out.pick = spec.pick;
     else if (spec.pick !== undefined) out.pick = normalizeSpec(spec.pick, depth + 1);
+  } else if (isNum(spec.beat)) {
+    out.beat = clampNum(spec.beat, ...BEATS);
+    if (LFO_SHAPES.includes(spec.shape)) out.shape = spec.shape;
+  } else if (MOMENTS.includes(spec.pulse) || isNum(spec.pulse)) {
+    out.pulse = isNum(spec.pulse) ? clampNum(spec.pulse, ...BEATS) : spec.pulse;
+    if (spec.accent === true) out.accent = true;
+  } else if (MOMENTS.includes(spec.rise)) {
+    out.rise = spec.rise;
+  } else if (spec.energy === true || spec.energy === 'section') {
+    out.energy = spec.energy;
   } else {
     throw new SongError('signal spec has no source');
   }
