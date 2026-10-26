@@ -727,6 +727,8 @@ input[type=range].centered::-moz-range-progress { background: transparent; }
 .panel .palette-stops input[type=color] { width: 30px; height: 24px; }
 .palette-stops button { padding: 0 8px; }
 .palette-ramp { flex-basis: 100%; height: 8px; border-radius: 4px; border: 1px solid var(--line); }
+/* a finish setting's value, or the range it follows a source through */
+.finish-follow { margin: -4px 0 8px; }
 .panel .glyph-field { align-items: start; }
 .glyph-editor { grid-column: 2 / -1; min-width: 0; }
 .glyph-grid {

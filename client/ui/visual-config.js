@@ -6,7 +6,7 @@ import { html } from '../lib.js';
 import { NO_3D_HINT, needs3D } from '../three.js';
 import { applyFinish } from './visual-canvas.js';
 import {
-  STYLE_KEYS, DEFAULT_LOOK, DEFAULT_FADE, FINISH_KEYS, HOLD_PICKS, LFO_SHAPES, MAX_FADE, MAX_TRAIL, MOMENTS, PALETTE_STOPS,
+  STYLE_KEYS, DEFAULT_LOOK, DEFAULT_FADE, FINISH_KEYS, FINISH_LEVEL_KEYS, HOLD_PICKS, LFO_SHAPES, MAX_FADE, MAX_TRAIL, MOMENTS, PALETTE_STOPS,
   PLACE_DEFAULTS, TIMBRE_NAMES, TONEMAP_NAMES, VISUAL_LIMITS, normalizePlace,
 } from '../../shared/visuals.js';
 
@@ -67,6 +67,44 @@ const FINISH_HINTS = {
   grain: 'Film grain, strongest in the mid-tones',
 };
 const TONEMAP_LABELS = { rolloff: 'Roll off', aces: 'ACES', agx: 'AgX', none: 'Clip' };
+
+// What exposure and saturation can follow, by how each moves: a 'level'
+// sits somewhere between 0 and 1 all the time, so the setting swings either
+// side of its value; a 'spike' rests at 0 and rises, so the setting rests at
+// its value and rises with it. Bands read against their own recent
+// dynamics, so they move in quiet passages as well as loud.
+const FOLLOWS = {
+  energy: { label: 'Song energy', group: 'The song', spec: { energy: true }, kind: 'level',
+    hint: 'How full the song is here: up in a chorus, down in a breakdown' },
+  sectionEnergy: { label: 'Section energy', group: 'The song', spec: { energy: 'section' }, kind: 'level',
+    hint: 'How full the whole section is, held steady through it' },
+  riseDrop: { label: 'Build-up to each drop', group: 'The song', spec: { rise: 'drop', seconds: 8 }, kind: 'spike',
+    hint: 'Climbs through the eight seconds before each drop, then lets go' },
+  riseSection: { label: 'Build-up to each section', group: 'The song', spec: { rise: 'section', seconds: 4 }, kind: 'spike',
+    hint: 'Climbs through the four seconds before each section change' },
+  beat: { label: 'Pulse on each beat', group: 'The song', spec: { pulse: 'beat', decay: 6 }, kind: 'spike',
+    hint: 'Flashes on every beat, landing exactly on it' },
+  bar: { label: 'Pulse on each bar', group: 'The song', spec: { pulse: 'bar', decay: 3 }, kind: 'spike',
+    hint: 'Flashes on the first beat of each bar' },
+  loudness: { label: 'Loudness', group: 'The sound', spec: { relative: 'rms' }, kind: 'level', smooth: 0.1 },
+  ...Object.fromEntries(Object.keys(BANDS).map((b) => [`band:${b}`, {
+    label: bandLabel(b), group: 'The sound', spec: { relative: b }, kind: 'level', smooth: 0.1,
+  }])),
+};
+const FOLLOW_GROUPS = [...new Set(Object.values(FOLLOWS).map((f) => f.group))];
+
+/** Which of FOLLOWS a spec is, its own shaping aside, or 'custom'. */
+function followOf(spec) {
+  const { gain, offset, smooth, ...source } = spec;
+  const json = JSON.stringify(source);
+  return Object.keys(FOLLOWS).find((key) => JSON.stringify(FOLLOWS[key].spec) === json) ?? 'custom';
+}
+
+/** Where a followed setting sits with its source at 0 and at 1. */
+const rangeOf = (spec) => {
+  const low = spec.offset ?? 0;
+  return [low, low + (spec.gain ?? 1)];
+};
 const TONEMAP_HINTS = {
   rolloff: 'Colours as drawn; light past white burns toward white with its hue held',
   aces: 'Filmic: deeper blacks, more contrast and colour',
@@ -1034,13 +1072,73 @@ export function FinishPanel({ title, hint, value, before, beforePreset, isBlock 
           <output></output>
           ${reset('tonemap')}
         </label>
-        ${Object.entries(FINISH_KEYS).map(([key, [min, max, step]]) => html`
+        ${Object.entries(FINISH_KEYS).map(([key, [min, max, step]]) => (FINISH_LEVEL_KEYS.includes(key) ? html`
+          <${FinishLevelField} key=${key} name=${key} range=${[min, max, step]} value=${settings[key]} own=${own[key] !== undefined}
+            onChange=${(v) => set(key, v)} reset=${reset(key)} />` : html`
           <label class=${`field ${own[key] !== undefined ? 'overridden' : ''}`} key=${key} title=${FINISH_HINTS[key]}>
             <span>${FINISH_LABELS[key] ?? key}</span>
             <input type="range" min=${min} max=${max} step=${step} value=${settings[key]}
               onInput=${(e) => set(key, Number(e.target.value))} />
             <output>${fmt(settings[key], step)}</output>
             ${reset(key)}
-          </label>`)}`}
+          </label>`))}`}
     </div>`;
+}
+
+/**
+ * A finish setting that may follow the music (FINISH_LEVEL_KEYS): fixed at
+ * a value, or following a source between two values, where it sits with the
+ * source at its lowest and its highest. Picking a source starts from the
+ * value in effect: a level swings a fifth either side of it, a spike rises
+ * from it by about a third.
+ */
+function FinishLevelField({ name, range: [min, max, step], value, own, onChange, reset }) {
+  const spec = typeof value === 'number' ? null : value;
+  const follow = spec ? followOf(spec) : 'fixed';
+  const snap = (x) => Math.min(max, Math.max(min, Math.round(x / step) * step));
+  const [low, high] = spec ? rangeOf(spec) : [value, value];
+  const smooth = spec?.smooth ?? 0;
+  const write = (source, lo, hi, sm) => {
+    const out = { ...source, gain: Number((hi - lo).toFixed(4)), offset: lo };
+    if (sm) out.smooth = sm;
+    return out;
+  };
+  const pick = (key) => {
+    if (key === 'fixed') return onChange(snap(spec ? (FOLLOWS[follow]?.kind === 'spike' ? low : (low + high) / 2) : value));
+    if (key === 'custom') return;
+    const f = FOLLOWS[key];
+    // Start from where the setting rests now.
+    const at = spec ? (FOLLOWS[follow]?.kind === 'level' ? (low + high) / 2 : low) : value;
+    const [lo, hi] = f.kind === 'spike' ? [snap(at), snap(at * 1.3)] : [snap(at * 0.8), snap(at * 1.2)];
+    onChange(write(f.spec, lo, hi, f.smooth ?? 0));
+  };
+  const source = spec && (() => { const { gain, offset, smooth: _, ...rest } = spec; return rest; })();
+  const set = (patch) => {
+    const next = { low, high, smooth, ...patch };
+    onChange(write(source, next.low, next.high, next.smooth));
+  };
+  return html`
+    <label class=${`field ${own ? 'overridden' : ''}`} title=${FINISH_HINTS[name]}>
+      <span>${FINISH_LABELS[name]}</span>
+      <select value=${follow} title=${FOLLOWS[follow]?.hint} onChange=${(e) => pick(e.target.value)}>
+        <option value="fixed">Fixed</option>
+        ${FOLLOW_GROUPS.map((group) => html`
+          <optgroup label=${`Follows ${group.toLowerCase()}`}>
+            ${Object.entries(FOLLOWS).filter(([, f]) => f.group === group)
+              .map(([key, f]) => html`<option value=${key} title=${f.hint}>${f.label}</option>`)}
+          </optgroup>`)}
+        ${follow === 'custom' && html`<option value="custom">Custom (${describeSpec(spec)})</option>`}
+      </select>
+      <output></output>
+      ${reset}
+    </label>
+    ${spec ? html`
+      <div class="finish-follow">
+        <${Slider} label="from" min=${min} max=${max} step=${step} value=${low} onInput=${(v) => set({ low: v })} />
+        <${Slider} label="to" min=${min} max=${max} step=${step} value=${high} onInput=${(v) => set({ high: v })} />
+        <${Slider} label="smooth" min="0" max="2" value=${smooth} unit="s" onInput=${(v) => set({ smooth: v })} />
+      </div>` : html`
+      <div class="finish-follow">
+        <${Slider} label="value" min=${min} max=${max} step=${step} value=${value} onInput=${onChange} />
+      </div>`}`;
 }

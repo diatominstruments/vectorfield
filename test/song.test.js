@@ -188,6 +188,24 @@ test('visuals: the finish, on the song and on blocks', () => {
   assert.equal(old.arrangement[0].finish, null);
 });
 
+test('visuals: exposure and saturation may follow the music; other finish settings may not', () => {
+  const song = sampleSong();
+  const [block] = song.arrangement;
+  song.finish = { preset: 'film', exposure: { energy: true, gain: 0.4, offset: 0.8 } };
+  block.finish = {
+    saturation: { rise: 'drop', seconds: 8, gain: 0.3, offset: 1, smooth: 0.1 },
+    bloom: { energy: true },
+  };
+  const clean = normalizeSong(song);
+  assert.deepEqual(clean.finish, song.finish);
+  assert.deepEqual(clean.arrangement[0].finish, { saturation: block.finish.saturation });
+
+  for (const bad of [{ energy: 'loud' }, { eval: '1' }, 'kick']) {
+    block.finish = { exposure: bad };
+    assert.throws(() => normalizeSong(song), SongError, JSON.stringify(bad));
+  }
+});
+
 test('visuals: grid options keep their drawing, bounded', () => {
   const song = sampleSong();
   const [block] = song.arrangement;

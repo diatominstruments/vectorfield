@@ -314,13 +314,20 @@ export const FINISH_KEYS = {
   grain: [0, 0.2, 0.005],
 };
 
+// The settings that may follow the music instead of holding a value: a
+// level spec, read every frame, so the whole frame brightens or drains with
+// the song. They change colour, never motion.
+export const FINISH_LEVEL_KEYS = ['exposure', 'saturation'];
+
 /** The kit's own default, so a song that never sets one looks as it would. */
 export const DEFAULT_FINISH = Object.freeze({ preset: 'clean' });
 
 /**
  * A finish: a preset and any settings changed from it, `{ preset?, tonemap?,
- * bloom?, … }`. Known keys only, numbers clamped. With `complete` (the
- * song's) it always names a preset; otherwise null when empty.
+ * bloom?, … }`. Known keys only, numbers clamped; the FINISH_LEVEL_KEYS may
+ * be signal specs instead, and throw like any other bad spec. With
+ * `complete` (the song's) it always names a preset; otherwise null when
+ * empty.
  */
 export function normalizeFinish(finish, { complete = false } = {}) {
   const out = {};
@@ -329,6 +336,7 @@ export function normalizeFinish(finish, { complete = false } = {}) {
     if (TONEMAP_NAMES.includes(finish.tonemap)) out.tonemap = finish.tonemap;
     for (const [key, [lo, hi]] of Object.entries(FINISH_KEYS)) {
       if (isNum(finish[key])) out[key] = clampNum(finish[key], lo, hi);
+      else if (FINISH_LEVEL_KEYS.includes(key) && finish[key] != null) out[key] = normalizeSpec(finish[key]);
     }
   }
   if (complete) return { preset: DEFAULT_FINISH.preset, ...out };
