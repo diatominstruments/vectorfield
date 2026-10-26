@@ -3,14 +3,20 @@
  * is browser-only). Everything here is plain data the kit consumes as-is:
  *
  *   look:  the song's base style — { background, lineColor, accentColor,
- *          peakColor, peakAbove, lineWidth, shadowBlur }
+ *          peakColor, palette, peakAbove, lineWidth, shadowBlur, halo,
+ *          atmosphere }
+ *   finish: the song's finishing pass — { preset, ...settings }; see
+ *          normalizeFinish()
  *   each arrangement block may carry
  *     visuals: [{ id, viz, bind, options,      kit timeline entries
- *                 place?, clip?, blend?, opacity?, style?, transition?, fade? }]
+ *                 place?, clip?, blend?, opacity?, style?, transition?, fade?,
+ *                 trail? }]
  *     style:   partial look, overriding the song's from that block on,
  *              until a later block changes the same setting
  *     transition, fade: how visuals come and go, also carried on from
  *              that block until a later block changes it (null: unset)
+ *     finish:  a partial finish, carried on the same way; one that names a
+ *              preset starts again from it
  *
  * `bind` maps a visualization's input slots to signal specs, in the kit's
  * own closed spec language (see gloaming-kit src/signals.js). Visualization
@@ -20,8 +26,9 @@
  * The optional entry fields are the kit's `universal` ones (gloaming-kit
  * src/placement.js): a region of the canvas, a clip shape, a blend mode, an
  * opacity (a number or a signal spec), a style of the entry's own over the
- * block's, and a transition and fade length that win over the block's.
- * They're left out of a visual entirely while unset.
+ * block's, and a transition and fade length that win over the block's. The
+ * kit's `trail` (how much of each frame's drawing lingers into the next)
+ * joins them. They're left out of a visual entirely while unset.
  */
 
 import { SongError } from './errors.js';
@@ -61,30 +68,43 @@ export const PLACE_DEFAULTS = Object.freeze({ x: 0, y: 0, w: 1, h: 1, rotate: 0,
 const PLACE_RANGES = { x: [-1, 2], y: [-1, 2], w: [0.01, 2], h: [0.01, 2], rotate: [-180, 180] };
 const FLIPS = ['x', 'y', 'xy'];
 
+/** The most of each frame an entry's trail may keep: one that kept everything would never clear. */
+export const MAX_TRAIL = 0.98;
+
 /** Seconds a transition takes when nothing sets it (the kit's own default), and the most it may. */
 export const DEFAULT_FADE = 0.6;
 export const MAX_FADE = 10;
 
 // 'color' is #rrggbb; 'color?' may also be null, which for peakColor means
-// off (the kit draws no third colour). Numbers are [min, max, step].
+// off (the kit draws no third colour). 'stops?' is a palette: PALETTE_STOPS
+// colours from the low end of the ramp to the high, or null for none (the
+// kit then ramps from lineColor to accentColor). Numbers are [min, max, step].
 export const STYLE_KEYS = {
   background: 'color',
   lineColor: 'color',
   accentColor: 'color',
   peakColor: 'color?',
+  palette: 'stops?',
   peakAbove: [0, 1, 0.05],
   lineWidth: [0.5, 8, 0.5],
   shadowBlur: [0, 40, 0.5],
+  halo: [0, 1, 0.05],
+  atmosphere: [0, 1, 0.05],
 };
+export const PALETTE_STOPS = [2, 7];
 
+// The kit's own defaults, so a song that never sets them looks as it would.
 export const DEFAULT_LOOK = Object.freeze({
   background: '#0a0a12',
   lineColor: '#7fffd4',
   accentColor: '#ff5d8f',
   peakColor: null,
+  palette: null,
   peakAbove: 0.8,
   lineWidth: 2,
   shadowBlur: 0,
+  halo: 1,
+  atmosphere: 0.6,
 });
 
 const COLOR = /^#[0-9a-f]{6}$/i;
@@ -99,8 +119,12 @@ export function normalizeStyle(style, { complete = false } = {}) {
   if (isObj(style)) {
     for (const [key, rule] of Object.entries(STYLE_KEYS)) {
       const v = style[key];
-      if (rule === 'color?' && v === null) out[key] = null;
-      else if (typeof rule === 'string' ? typeof v === 'string' && COLOR.test(v) : typeof v === 'number' && Number.isFinite(v)) {
+      if ((rule === 'color?' || rule === 'stops?') && v === null) out[key] = null;
+      else if (rule === 'stops?') {
+        const ok = Array.isArray(v) && v.length >= PALETTE_STOPS[0] && v.length <= PALETTE_STOPS[1]
+          && v.every((c) => typeof c === 'string' && COLOR.test(c));
+        if (ok) out[key] = v.map((c) => c.toLowerCase());
+      } else if (typeof rule === 'string' ? typeof v === 'string' && COLOR.test(v) : typeof v === 'number' && Number.isFinite(v)) {
         out[key] = typeof rule === 'string' ? v.toLowerCase() : clampNum(v, rule[0], rule[1]);
       }
     }
@@ -242,6 +266,7 @@ function normalizeVisual(v, newId) {
   if (transition) out.transition = transition;
   const fade = normalizeFade(v.fade);
   if (fade !== null) out.fade = fade;
+  if (isNum(v.trail)) out.trail = clampNum(v.trail, 0, MAX_TRAIL);
   return out;
 }
 
@@ -267,4 +292,45 @@ export function normalizeVisuals(list, newId) {
   if (!Array.isArray(list)) throw new SongError('visuals must be a list');
   if (list.length > VISUAL_LIMITS.perBlock) throw new SongError(`too many visuals on one block (max ${VISUAL_LIMITS.perBlock})`);
   return list.map((v) => normalizeVisual(v, newId));
+}
+
+// ---- the finishing pass ------------------------------------------------------
+
+// Mirrors of the kit's FINISH_PRESETS names and TONEMAPS. 'off' is ours: on
+// the song it draws straight to the screen, on a block it leaves the frame
+// alone (the kit's 'none').
+export const FINISH_PRESET_NAMES = ['clean', 'neon', 'film', 'none', 'off'];
+export const TONEMAP_NAMES = ['rolloff', 'agx', 'aces', 'none'];
+
+// The kit's numeric finish settings, [min, max, step].
+export const FINISH_KEYS = {
+  bloom: [0, 3, 0.05],
+  bloomThreshold: [0, 4, 0.05],
+  bloomRadius: [0, 1, 0.05],
+  headroom: [1, 8, 0.1],
+  exposure: [0.1, 4, 0.05],
+  saturation: [0, 2, 0.05],
+  vignette: [0, 1, 0.01],
+  grain: [0, 0.2, 0.005],
+};
+
+/** The kit's own default, so a song that never sets one looks as it would. */
+export const DEFAULT_FINISH = Object.freeze({ preset: 'clean' });
+
+/**
+ * A finish: a preset and any settings changed from it, `{ preset?, tonemap?,
+ * bloom?, … }`. Known keys only, numbers clamped. With `complete` (the
+ * song's) it always names a preset; otherwise null when empty.
+ */
+export function normalizeFinish(finish, { complete = false } = {}) {
+  const out = {};
+  if (isObj(finish)) {
+    if (FINISH_PRESET_NAMES.includes(finish.preset)) out.preset = finish.preset;
+    if (TONEMAP_NAMES.includes(finish.tonemap)) out.tonemap = finish.tonemap;
+    for (const [key, [lo, hi]] of Object.entries(FINISH_KEYS)) {
+      if (isNum(finish[key])) out[key] = clampNum(finish[key], lo, hi);
+    }
+  }
+  if (complete) return { preset: DEFAULT_FINISH.preset, ...out };
+  return Object.keys(out).length ? out : null;
 }

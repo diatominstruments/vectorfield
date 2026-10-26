@@ -1,24 +1,43 @@
 import { useEffect, useRef } from 'preact/hooks';
-import { GloamingKit } from 'gloaming-kit';
+import { FINISH_DEFAULTS, FINISH_PRESETS, GloamingKit } from 'gloaming-kit';
 import { html } from '../lib.js';
 import { THREE, has3D } from '../three.js';
-import { blockTimes, stylesInEffect, transitionsInEffect, visualsInEffect } from '../../shared/song.js';
+import { blockTimes, finishesInEffect, stylesInEffect, transitionsInEffect, visualsInEffect } from '../../shared/song.js';
 
 // A visual's optional entry fields, passed to the kit as they are.
-const ENTRY_FIELDS = ['place', 'clip', 'blend', 'opacity', 'style', 'transition', 'fade'];
+const ENTRY_FIELDS = ['place', 'clip', 'blend', 'opacity', 'style', 'transition', 'fade', 'trail'];
+
+/**
+ * A finish (see shared/visuals.js) over `settings`, as the kit's plain
+ * settings: one that names a preset starts again from it, and 'off' leaves
+ * the frame alone (the kit's 'none'); then its own changes apply.
+ */
+export function applyFinish(settings, finish) {
+  if (!finish) return settings;
+  const { preset, ...own } = finish;
+  const base = preset ? { ...FINISH_DEFAULTS, ...FINISH_PRESETS[preset === 'off' ? 'none' : preset] } : settings;
+  return { ...base, ...own };
+}
+
+/** The song's finish as the kit's settings; 'off' leaves the frame alone. */
+export const songFinish = (finish) => applyFinish(FINISH_DEFAULTS, finish);
 
 /**
  * The kit's timeline for a song: one window per block, showing the visuals
  * in effect there. A block without visuals repeats the previous block's
  * entries, and since the kit keys instances by their settings, those carry
- * on across the boundary without restarting. A block's style and
- * transition changes carry on the same way, setting by setting.
+ * on across the boundary without restarting. A block's style, transition
+ * and finish changes carry on the same way, setting by setting. A block's
+ * finish goes to the kit whole, over the song's, so the kit needn't know
+ * how presets start again.
  */
 export function songTimeline(doc) {
   const times = blockTimes(doc);
   const inEffect = visualsInEffect(doc);
   const styles = stylesInEffect(doc);
   const transitions = transitionsInEffect(doc);
+  const finishes = finishesInEffect(doc);
+  const base = songFinish(doc.finish);
   return doc.arrangement.map((block, i) => {
     const { transition, fade } = transitions[i];
     return {
@@ -32,6 +51,7 @@ export function songTimeline(doc) {
       style: styles[i],
       ...(transition && { transition }),
       ...(fade !== null && { fade }),
+      ...(finishes[i] && { finish: applyFinish(base, finishes[i]) }),
     };
   });
 }
@@ -46,14 +66,17 @@ export function songTimeline(doc) {
  * can't work out from a live node itself; without it the kit estimates the
  * beat as it plays.
  *
- * `timeline`, `look` and `analysis` are pushed only when they really
+ * `finish` is the song's (shared/visuals.js); 'off' draws straight to the
+ * screen, without the kit's WebGL2 pass, unless a block has a finish.
+ *
+ * `timeline`, `look`, `finish` and `analysis` are pushed only when they really
  * change: setStyle snaps the live style, which would cut short the kit's
  * own easing between blocks if it ran on every render.
  */
-export function VisualCanvas({ engine, timeline, look, analysis = null, holdTime, class: className = 'preview', onClick }) {
+export function VisualCanvas({ engine, timeline, look, finish, analysis = null, holdTime, class: className = 'preview', onClick }) {
   const canvasRef = useRef();
   const kitRef = useRef(null);
-  const applied = useRef({ timeline: null, look: null, analysis: null });
+  const applied = useRef({ timeline: null, look: null, finish: null, analysis: null });
   const analysisRef = useRef(analysis);
   analysisRef.current = analysis;
 
@@ -62,7 +85,7 @@ export function VisualCanvas({ engine, timeline, look, analysis = null, holdTime
     // No analysis of its own: a live node has nothing to decode.
     const kit = new GloamingKit({ canvas: canvasRef.current, audioContext: ctx, monitor: false, three: THREE, enable3D: has3D, analyze: false });
     kitRef.current = kit;
-    applied.current = { timeline: null, look: null, analysis: null };
+    applied.current = { timeline: null, look: null, finish: null, analysis: null };
     kit.load({
       node: engine.output,
       clock: {
@@ -99,6 +122,11 @@ export function VisualCanvas({ engine, timeline, look, analysis = null, holdTime
     if (l !== applied.current.look) {
       kit.setStyle(look);
       applied.current.look = l;
+    }
+    const f = JSON.stringify(finish);
+    if (finish && f !== applied.current.finish) {
+      kit.setFinish(finish.preset === 'off' ? false : songFinish(finish));
+      applied.current.finish = f;
     }
   });
 

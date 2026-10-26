@@ -1,6 +1,8 @@
 import { registry, sanitizeParams } from 'gloaming-instruments';
 import { SongError } from './errors.js';
-import { DEFAULT_LOOK, normalizeFade, normalizeStyle, normalizeTransition, normalizeVisuals } from './visuals.js';
+import {
+  DEFAULT_FINISH, DEFAULT_LOOK, normalizeFade, normalizeFinish, normalizeStyle, normalizeTransition, normalizeVisuals,
+} from './visuals.js';
 import { normalizeBounce, defaultBounce } from './bounce.js';
 import { normalizeTubules, defaultTubules } from './tubules.js';
 import { normalizeAnts, defaultAnts } from './ants.js';
@@ -37,11 +39,12 @@ export { SongError };
  *                  automation: [{ id, track, effect?, param,
  *                                 points: [{ step, value }] }] }],
  *     arrangement: [{ id, pattern, visuals, style,     // blocks in play order
- *                     transition, fade,
+ *                     transition, fade, finish,
  *                     repeat, mute: [trackId], section,
  *                     follow: [{ to: blockId | null, weight }] }],
  *     loop: blockId | null,                            // where the song goes on from at its end
  *     look: { background, lineColor, ... },            // base visual style
+ *     finish: { preset, ... },                         // the visuals' finishing pass
  *   }
  *
  * Steps are sixteenth notes. `length` is in steps. Module entries use the
@@ -64,9 +67,9 @@ export { SongError };
  *
  * An arrangement block plays one pattern; the same pattern may appear in any
  * number of blocks. A block also carries the visualizations shown while it
- * plays, an optional style override and an optional visual transition and
- * fade length, each of which carries on through later blocks until one
- * changes the same setting — see visuals.js.
+ * plays, an optional style override, an optional visual transition and
+ * fade length, and an optional finish, each of which carries on through
+ * later blocks until one changes the same setting — see visuals.js.
  *
  * A block plays its pattern `repeat` times, silencing the tracks in its
  * `mute`. A `section` name starts a section that runs until the next block
@@ -207,7 +210,7 @@ export function automationValue(points, step) {
 
 export function newBlock(patternId, visuals = []) {
   return {
-    id: newId(), pattern: patternId, visuals, style: null, transition: null, fade: null,
+    id: newId(), pattern: patternId, visuals, style: null, transition: null, fade: null, finish: null,
     repeat: 1, mute: [], section: null, follow: [],
   };
 }
@@ -330,6 +333,20 @@ export function transitionsInEffect(song) {
 }
 
 /**
+ * The finish in effect during each block, over the song's: each setting a
+ * block changes carries on through later blocks until one changes it again,
+ * and a block that names a preset starts again from it, dropping earlier
+ * blocks' changes. Null while no block has set one.
+ */
+export function finishesInEffect(song) {
+  let current = null;
+  return song.arrangement.map((block) => {
+    if (block.finish) current = block.finish.preset ? { ...block.finish } : { ...current, ...block.finish };
+    return current;
+  });
+}
+
+/**
  * Start and end of each arrangement block, in seconds, laid end to end in
  * arrangement order with its repeats. A song that loops or follows choices
  * doesn't play in this order, but this is still where each block sits on
@@ -360,6 +377,7 @@ export function defaultSong() {
     arrangement: [newBlock(pattern.id)],
     loop: null,
     look: { ...DEFAULT_LOOK },
+    finish: { ...DEFAULT_FINISH },
   };
 }
 
@@ -582,6 +600,7 @@ export function normalizeSong(doc) {
         style: normalizeStyle(b.style),
         transition: normalizeTransition(b.transition),
         fade: normalizeFade(b.fade),
+        finish: normalizeFinish(b.finish),
         repeat: int(b.repeat, 1, LIMITS.repeat, 1),
         mute: [...new Set(Array.isArray(b.mute) ? b.mute : [])].filter((t) => trackIds.has(t)),
         section: typeof b.section === 'string' && b.section.trim() ? b.section.trim().slice(0, LIMITS.sectionLength) : null,
@@ -605,6 +624,7 @@ export function normalizeSong(doc) {
     arrangement,
     loop: blockIds.has(doc.loop) ? doc.loop : null,
     look: normalizeStyle(doc.look, { complete: true }),
+    finish: normalizeFinish(doc.finish, { complete: true }),
   };
 }
 

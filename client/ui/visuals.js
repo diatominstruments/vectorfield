@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { catalog, describe } from 'gloaming-kit';
 import { html, hue, useEngineEvent } from '../lib.js';
-import { blockTimes, newId, newVisual, stylesInEffect, transitionsInEffect, visualsInEffect } from '../../shared/song.js';
+import {
+  blockTimes, finishesInEffect, newId, newVisual, stylesInEffect, transitionsInEffect, visualsInEffect,
+} from '../../shared/song.js';
 import { VISUAL_LIMITS } from '../../shared/visuals.js';
-import { VisualPanel, LookPanel, TransitionPanel, hasSettings, vizLabel } from './visual-config.js';
+import { VisualPanel, LookPanel, TransitionPanel, FinishPanel, hasSettings, vizLabel } from './visual-config.js';
 import { songAnalysis } from '../../shared/timing.js';
-import { VisualCanvas, songTimeline } from './visual-canvas.js';
+import { VisualCanvas, applyFinish, songFinish, songTimeline } from './visual-canvas.js';
 import { fmtTime } from './song-view.js';
 import { NO_3D_HINT, has3D, needs3D } from '../three.js';
 
@@ -30,8 +32,8 @@ function previewDoc(doc, browse) {
  */
 function Preview({ store, engine, previewTime, browse }) {
   const doc = previewDoc(store.doc, browse);
-  return html`<${VisualCanvas} engine=${engine} timeline=${songTimeline(doc)} look=${store.doc.look} analysis=${songAnalysis(store.doc)}
-    holdTime=${previewTime} />`;
+  return html`<${VisualCanvas} engine=${engine} timeline=${songTimeline(doc)} look=${store.doc.look} finish=${store.doc.finish}
+    analysis=${songAnalysis(store.doc)} holdTime=${previewTime} />`;
 }
 
 // What Copy took: the visuals and look one block shows, kept for the
@@ -68,6 +70,9 @@ export function VisualsView({ store, engine }) {
   const lookBefore = (i) => ({ ...doc.look, ...(i > 0 ? styles[i - 1] : null) });
   // Likewise its transition: what earlier blocks set, or nothing.
   const transitionBefore = (i) => (i > 0 ? transitions[i - 1] : { transition: null, fade: null });
+  // And its finish: the song's, with earlier blocks' changes.
+  const finishes = finishesInEffect(doc);
+  const finishBefore = (i) => (i > 0 ? finishes[i - 1] : null);
 
   const select = (sel, blockIndex) => {
     setSelection(sel);
@@ -131,7 +136,7 @@ export function VisualsView({ store, engine }) {
   const paste = (i) => {
     const block = doc.arrangement[i];
     const before = lookBefore(i);
-    const style = Object.fromEntries(Object.entries(copied.look).filter(([key, v]) => v !== before[key]));
+    const style = Object.fromEntries(Object.entries(copied.look).filter(([key, v]) => JSON.stringify(v) !== JSON.stringify(before[key])));
     const { transition, fade } = copied.transition;
     const was = transitionBefore(i);
     const undo = { blockId: block.id, visuals: structuredClone(block.visuals), style: block.style, transition: block.transition, fade: block.fade };
@@ -193,11 +198,19 @@ export function VisualsView({ store, engine }) {
       <${TransitionPanel} title="Transition" value=${{ transition: selBlock.transition, fade: selBlock.fade }}
         inherited=${transitionBefore(selIndex)}
         hint="How visuals come on and go off from this block on, until a later block changes it. Visuals arriving here use it, and so do visuals leaving when this block ends, so blocks that share one change along a single edge. A visual can set its own."
-        onChange=${(key, value) => editBlock(selBlock.id, (b) => { b[key] = value ?? null; })} />`;
+        onChange=${(key, value) => editBlock(selBlock.id, (b) => { b[key] = value ?? null; })} />
+      <${FinishPanel} title="Finish" isBlock value=${selBlock.finish}
+        before=${applyFinish(songFinish(doc.finish), finishBefore(selIndex))}
+        beforePreset=${finishBefore(selIndex)?.preset ?? doc.finish.preset}
+        hint="What the frame goes through on its way to the screen, from this block on, until a later block changes it: glow, tone, grain."
+        onChange=${(finish) => editBlock(selBlock.id, (b) => { b.finish = finish; })} />`;
   } else {
     panel = html`<${LookPanel} title="Song look" style=${doc.look}
       hint="The base colours for every block. Click a song block to change them for one section, or a visual to configure it."
-      onChange=${(key, value) => store.edit((d) => { d.look[key] = value; })} />`;
+      onChange=${(key, value) => store.edit((d) => { d.look[key] = value; })} />
+      <${FinishPanel} title="Finish" value=${doc.finish} before=${songFinish(null)} beforePreset=${doc.finish.preset}
+        hint="What every frame goes through on its way to the screen: glow, tone, vignette and grain. A song block can change it for a section."
+        onChange=${(finish) => store.edit((d) => { d.finish = finish; })} />`;
   }
 
   // ⌘C copies the selected block, ⌘V pastes onto it, and Esc stops pasting.

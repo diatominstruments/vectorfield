@@ -122,7 +122,7 @@ function CoverPicker({ store, engine, value, published, onChange }) {
   return html`
     <div class="cover-picker">
       <div class="cover-live" ref=${liveRef}>
-        <${VisualCanvas} engine=${engine} timeline=${songTimeline(store.doc)} look=${store.doc.look} analysis=${songAnalysis(store.doc)} holdTime=${holdTime}
+        <${VisualCanvas} engine=${engine} timeline=${songTimeline(store.doc)} look=${store.doc.look} finish=${store.doc.finish} analysis=${songAnalysis(store.doc)} holdTime=${holdTime}
           class="cover-canvas" />
         <div class="cover-actions">
           <button class=${`play ${playing ? 'on' : ''}`} disabled=${!canPlay}

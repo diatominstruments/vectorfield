@@ -96,7 +96,7 @@ function Player({ song, user }) {
   return html`
     <main class="song-page">
       <div ref=${stageRef} class=${`stage ${full ? 'full' : ''} ${full && idle && playing ? 'idle' : ''}`} onPointerMove=${onPointerMove}>
-        <${VisualCanvas} engine=${engine} timeline=${timeline} look=${doc.look} analysis=${analysis} holdTime=${holdTime} class="stage-canvas"
+        <${VisualCanvas} engine=${engine} timeline=${timeline} look=${doc.look} finish=${doc.finish} analysis=${analysis} holdTime=${holdTime} class="stage-canvas"
           onClick=${canPlay ? toggle : undefined} />
         ${section?.name && html`<span key=${section.from} class="stage-section" aria-live="polite">${section.name}</span>`}
         ${!playing && html`

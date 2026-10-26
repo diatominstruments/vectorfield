@@ -1,10 +1,13 @@
-import { BANDS, BLENDS, CLIPS, DEFAULT_TRIGGERS, Glyph, TIMING_TRIGGERS, TRANSITIONS, catalog, describe } from 'gloaming-kit';
+import {
+  BANDS, BLENDS, CLIPS, DEFAULT_TRIGGERS, Glyph, PALETTES, TIMING_TRIGGERS, TRANSITIONS, catalog, describe, registry,
+} from 'gloaming-kit';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { html } from '../lib.js';
 import { NO_3D_HINT, needs3D } from '../three.js';
+import { applyFinish } from './visual-canvas.js';
 import {
-  STYLE_KEYS, DEFAULT_LOOK, DEFAULT_FADE, HOLD_PICKS, LFO_SHAPES, MAX_FADE, MOMENTS, PLACE_DEFAULTS, TIMBRE_NAMES, VISUAL_LIMITS,
-  normalizePlace,
+  STYLE_KEYS, DEFAULT_LOOK, DEFAULT_FADE, FINISH_KEYS, HOLD_PICKS, LFO_SHAPES, MAX_FADE, MAX_TRAIL, MOMENTS, PALETTE_STOPS,
+  PLACE_DEFAULTS, TIMBRE_NAMES, TONEMAP_NAMES, VISUAL_LIMITS, normalizePlace,
 } from '../../shared/visuals.js';
 
 // ---- names -------------------------------------------------------------------
@@ -33,8 +36,42 @@ const TIMBRE_HINTS = {
 const timbreLabel = (t) => TIMBRE_LABELS[t] ?? t;
 
 const STYLE_LABELS = {
-  background: 'Background', lineColor: 'Line', accentColor: 'Accent', peakColor: 'Peak',
-  peakAbove: 'Peak above', lineWidth: 'Line width', shadowBlur: 'Glow',
+  background: 'Background', lineColor: 'Line', accentColor: 'Accent', peakColor: 'Peak', palette: 'Palette',
+  peakAbove: 'Peak above', lineWidth: 'Line width', shadowBlur: 'Glow', halo: 'Halo', atmosphere: 'Atmosphere',
+};
+// The air behind everything is drawn once for the whole frame, so a visual can't have its own.
+const ENTRY_OMITS = ['atmosphere'];
+const PALETTE_NAMES = Object.keys(PALETTES);
+const sameStops = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+const FINISH_PRESET_LABELS = { clean: 'Clean', neon: 'Neon', film: 'Film', none: 'Plain', off: 'Off' };
+const FINISH_PRESET_HINTS = {
+  clean: 'A soft glow on bright light, highlights that roll off, a light vignette',
+  neon: 'Lines as lit tubes: a strong, wide glow, a little more colour, a touch of grain',
+  film: 'Graded: deep blacks and contrast, a wide halo, grain, a heavier vignette',
+  none: 'The frame as drawn',
+  off: 'The frame as drawn, with no finishing pass',
+};
+const FINISH_LABELS = {
+  bloom: 'Bloom', bloomThreshold: 'Bloom from', bloomRadius: 'Bloom spread', headroom: 'Headroom',
+  exposure: 'Exposure', saturation: 'Saturation', vignette: 'Vignette', grain: 'Grain',
+};
+const FINISH_HINTS = {
+  bloom: 'How strongly bright light glows',
+  bloomThreshold: 'How bright light must be to glow; lower, and mid-tones glow too',
+  bloomRadius: 'How far the glow spreads',
+  headroom: 'How much hotter than white the brightest parts read, so they glow harder than colours do',
+  exposure: 'Brightness of the whole frame',
+  saturation: 'Colourfulness: 0 grey, 1 as drawn',
+  vignette: 'How dark the corners go',
+  grain: 'Film grain, strongest in the mid-tones',
+};
+const TONEMAP_LABELS = { rolloff: 'Roll off', aces: 'ACES', agx: 'AgX', none: 'Clip' };
+const TONEMAP_HINTS = {
+  rolloff: 'Colours as drawn; light past white burns toward white with its hue held',
+  aces: 'Filmic: deeper blacks, more contrast and colour',
+  agx: 'Filmic: flatter and less saturated; suits scenes more than line art',
+  none: 'Light past white clips',
 };
 
 const TRANSITION_LABELS = {
@@ -611,7 +648,7 @@ function OptionField({ name, def, value, onChange }) {
 // ---- entry fields: placement, blending, colours, transition ------------------
 
 /** The keys a visual has beyond its viz, bindings and options; see shared/visuals.js. */
-const ENTRY_KEYS = ['place', 'clip', 'blend', 'opacity', 'style', 'transition', 'fade'];
+const ENTRY_KEYS = ['place', 'clip', 'blend', 'opacity', 'style', 'transition', 'fade', 'trail'];
 
 /** Whether a visual has been changed from its visualization's defaults at all. */
 export const hasSettings = (v) => Object.keys(v.bind).length > 0 || Object.keys(v.options).length > 0
@@ -756,6 +793,9 @@ export function VisualPanel({ visual, blockLabel, look, transition, onChange, on
 
   const inputs = info?.inputs ?? [];
   const options = info?.options ?? [];
+  const trailDefault = registry.get(visual.viz)?.trail ?? 0;
+  const trail = visual.trail ?? trailDefault;
+  const trailText = (t) => (t ? fmt(t, 0.01) : 'off');
   const placed = ['place', 'clip', 'blend', 'opacity'].some((key) => visual[key] !== undefined);
 
   return html`
@@ -808,7 +848,17 @@ export function VisualPanel({ visual, blockLabel, look, transition, onChange, on
         <//>
         <${Section} title="Colours" active=${visual.style !== undefined}>
           <p class="hint muted">This visual's own colours, over the block's look. The page behind stays the block's background.</p>
-          <${LookFields} style=${visual.style} inherited=${look} resetTitle="Use the block's look" onChange=${setStyle} />
+          <${LookFields} style=${visual.style} inherited=${look} entry resetTitle="Use the block's look" onChange=${setStyle} />
+        <//>
+        <${Section} title="Afterglow" active=${visual.trail !== undefined}>
+          <p class="hint muted">How much of each frame's drawing lingers into the next, so the figure leaves a trail, like phosphor or a long exposure: 0.7 a glint, 0.9 about a quarter of a second, 0.97 a long smear.</p>
+          <label class=${`field ${visual.trail !== undefined ? 'overridden' : ''}`}>
+            <span>Trail</span>
+            <input type="range" min="0" max=${MAX_TRAIL} step="0.01" value=${trail} onInput=${(e) => set('trail', Number(e.target.value))} />
+            <output>${trailText(trail)}</output>
+            <button class="ghost reset" disabled=${visual.trail === undefined} title=${`Use the default (${trailText(trailDefault)})`}
+              onClick=${(e) => { e.preventDefault(); set('trail', undefined); }}>↺</button>
+          </label>
         <//>
         <${Section} title="Transition" active=${visual.transition !== undefined || visual.fade !== undefined}>
           <p class="hint muted">How this visual comes on and goes off, in place of the block's transition.</p>
@@ -821,7 +871,7 @@ export function VisualPanel({ visual, blockLabel, look, transition, onChange, on
  * The look's fields. For the song look, every key has a value. Elsewhere
  * keys inherit from `inherited` until changed; changed keys can be reset.
  */
-function LookFields({ style, inherited, resetTitle, onChange }) {
+function LookFields({ style, inherited, entry = false, resetTitle, onChange }) {
   const isBlock = Boolean(inherited);
   // Not `??`: a null peakColor is a setting (off), not a missing one.
   const value = (key) => [style?.[key], inherited?.[key]].find((v) => v !== undefined) ?? DEFAULT_LOOK[key];
@@ -847,8 +897,12 @@ function LookFields({ style, inherited, resetTitle, onChange }) {
     return fmt(v, rule[2]);
   };
 
-  return Object.entries(STYLE_KEYS).map(([key, rule]) => {
+  return Object.entries(STYLE_KEYS).filter(([key]) => !(entry && ENTRY_OMITS.includes(key))).map(([key, rule]) => {
     const overridden = isBlock && style?.[key] !== undefined;
+    if (rule === 'stops?') {
+      return html`<${PaletteField} key=${key} value=${value(key)} line=${value('lineColor')} accent=${value('accentColor')}
+        entry=${entry} overridden=${overridden} isBlock=${isBlock} resetTitle=${resetTitle} onChange=${onChange} />`;
+    }
     return html`
       <label class=${`field ${overridden ? 'overridden' : ''}`} key=${key}>
         <span>${STYLE_LABELS[key]}</span>
@@ -858,6 +912,50 @@ function LookFields({ style, inherited, resetTitle, onChange }) {
           title=${resetTitle}>↺</button>`}
       </label>`;
   });
+}
+
+/**
+ * A look's palette: none (the kit ramps from line to accent), one of the
+ * kit's named palettes, or stops of its own. A named palette is a whole
+ * look, so picking one sets the line, accent, peak and (except on a visual)
+ * background colours too; they can be changed after.
+ */
+function PaletteField({ value, line, accent, entry, overridden, isBlock, resetTitle, onChange }) {
+  const named = PALETTE_NAMES.find((n) => sameStops(PALETTES[n].palette, value));
+  const choice = value === null ? 'none' : named ?? 'custom';
+  const pick = (name) => {
+    if (name === 'none') return onChange('palette', null);
+    if (name === 'custom') return onChange('palette', value ?? [line, accent]);
+    const p = PALETTES[name];
+    for (const key of ['lineColor', 'accentColor', 'peakColor', ...(entry ? [] : ['background'])]) onChange(key, p[key]);
+    onChange('palette', [...p.palette]);
+  };
+  const [min, max] = PALETTE_STOPS;
+  const edit = (e, stops) => { e.preventDefault(); onChange('palette', stops); };
+  return html`
+    <label class=${`field ${overridden ? 'overridden' : ''}`}>
+      <span>Palette</span>
+      <select value=${choice} title=${PALETTES[choice]?.description} onChange=${(e) => pick(e.target.value)}>
+        <option value="none" title="No palette: figures ramp from the line colour to the accent">None</option>
+        <optgroup label="Named">
+          ${PALETTE_NAMES.map((n) => html`<option value=${n} title=${PALETTES[n].description}>${PALETTES[n].label}</option>`)}
+        </optgroup>
+        <option value="custom">Custom</option>
+      </select>
+      <output></output>
+      ${isBlock && html`<button class="ghost reset" disabled=${!overridden} onClick=${(e) => { e.preventDefault(); onChange('palette', undefined); }}
+        title=${resetTitle}>↺</button>`}
+    </label>
+    ${value && html`
+      <div class="palette-stops">
+        <span class="palette-ramp" style=${`background: linear-gradient(to right in oklab, ${value.join(', ')})`}></span>
+        ${value.map((c, i) => html`<input type="color" key=${i} value=${c} aria-label=${`Palette stop ${i + 1}`}
+          onInput=${(e) => onChange('palette', value.map((s, j) => (j === i ? e.target.value : s)))} />`)}
+        <button class="ghost" disabled=${value.length >= max} title="Another stop at the high end"
+          onClick=${(e) => edit(e, [...value, value.at(-1)])}>+</button>
+        <button class="ghost" disabled=${value.length <= min} title="Take off the high end's stop"
+          onClick=${(e) => edit(e, value.slice(0, -1))}>−</button>
+      </div>`}`;
 }
 
 /**
@@ -880,5 +978,69 @@ export function TransitionPanel({ title, hint, value, inherited, onChange }) {
       <header><h3>${title}</h3></header>
       ${hint && html`<p class="muted hint">${hint}</p>`}
       <${TransitionFields} value=${value} inherited=${inherited} resetTitle="Use the transition from before this block" onChange=${onChange} />
+    </div>`;
+}
+
+/**
+ * The finishing pass: a preset, then any of its settings changed. `value`
+ * is what this level sets (the song's always names a preset), `before` the
+ * kit settings in effect without it, and `beforePreset` the preset those
+ * came from. On a block, changes carry on through later blocks until one
+ * changes them again, and picking a preset starts again from it, so it
+ * drops this level's changes.
+ */
+export function FinishPanel({ title, hint, value, before, beforePreset, isBlock = false, onChange }) {
+  const own = value ?? {};
+  const settings = applyFinish(before, own);
+  const preset = own.preset ?? beforePreset;
+  const resetTitle = isBlock ? 'Use the finish from before this block' : "Use the preset's";
+  const change = (next) => onChange(Object.keys(next).length ? next : null);
+  const set = (key, v) => {
+    const next = { ...own };
+    if (v === undefined) delete next[key]; else next[key] = v;
+    change(next);
+  };
+  const pickPreset = (p) => {
+    if (p) return change({ preset: p });
+    const { preset: _, ...rest } = own;
+    change(rest);
+  };
+  const reset = (key) => html`
+    <button class="ghost reset" disabled=${own[key] === undefined} title=${resetTitle}
+      onClick=${(e) => { e.preventDefault(); set(key, undefined); }}>↺</button>`;
+  const presets = ['clean', 'neon', 'film', 'off', ...(preset === 'none' ? ['none'] : [])];
+  return html`
+    <div class="panel finish-panel">
+      <header><h3>${title}</h3></header>
+      ${hint && html`<p class="muted hint">${hint}</p>`}
+      <label class=${`field ${isBlock && own.preset ? 'overridden' : ''}`}>
+        <span>Preset</span>
+        <select value=${own.preset ?? ''} title=${FINISH_PRESET_HINTS[preset]} onChange=${(e) => pickPreset(e.target.value)}>
+          ${isBlock && html`<option value="">From before (${FINISH_PRESET_LABELS[beforePreset]})</option>`}
+          ${presets.map((p) => html`<option value=${p} title=${FINISH_PRESET_HINTS[p]}>${FINISH_PRESET_LABELS[p]}</option>`)}
+        </select>
+        <output></output>
+        ${isBlock && html`<button class="ghost reset" disabled=${!own.preset} title=${resetTitle}
+          onClick=${(e) => { e.preventDefault(); pickPreset(''); }}>↺</button>`}
+      </label>
+      ${preset === 'off' ? html`
+        <p class="muted hint">${isBlock ? 'The frame is left as drawn from this block on.'
+          : 'Drawn straight to the screen, without the finishing pass, except where a block sets a finish.'}</p>` : html`
+        <label class=${`field ${own.tonemap !== undefined ? 'overridden' : ''}`}>
+          <span>Tone map</span>
+          <select value=${settings.tonemap} title=${TONEMAP_HINTS[settings.tonemap]} onChange=${(e) => set('tonemap', e.target.value)}>
+            ${TONEMAP_NAMES.map((t) => html`<option value=${t} title=${TONEMAP_HINTS[t]}>${TONEMAP_LABELS[t] ?? t}</option>`)}
+          </select>
+          <output></output>
+          ${reset('tonemap')}
+        </label>
+        ${Object.entries(FINISH_KEYS).map(([key, [min, max, step]]) => html`
+          <label class=${`field ${own[key] !== undefined ? 'overridden' : ''}`} key=${key} title=${FINISH_HINTS[key]}>
+            <span>${FINISH_LABELS[key] ?? key}</span>
+            <input type="range" min=${min} max=${max} step=${step} value=${settings[key]}
+              onInput=${(e) => set(key, Number(e.target.value))} />
+            <output>${fmt(settings[key], step)}</output>
+            ${reset(key)}
+          </label>`)}`}
     </div>`;
 }

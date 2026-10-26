@@ -45,7 +45,7 @@ function EmbedPlayer({ song }) {
   return html`
     <main ref=${stageRef} class=${`embed ${playing ? 'playing' : ''} ${idle && playing ? 'idle' : ''}`}
       onPointerMove=${onPointerMove}>
-      <${VisualCanvas} engine=${engine} timeline=${timeline} look=${doc.look} analysis=${analysis} holdTime=${holdTime} class="embed-canvas"
+      <${VisualCanvas} engine=${engine} timeline=${timeline} look=${doc.look} finish=${doc.finish} analysis=${analysis} holdTime=${holdTime} class="embed-canvas"
         onClick=${canPlay ? toggle : undefined} />
       ${!played && html`<img class="embed-poster" src=${coverPath(song.id, song.coverAt)} alt="" />`}
 

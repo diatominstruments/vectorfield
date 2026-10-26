@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  defaultSong, normalizeSong, blockTimes, stylesInEffect, transitionsInEffect, visualsInEffect, newBlock, newVisual, copyBlock, removeBlock,
+  defaultSong, normalizeSong, blockTimes, stylesInEffect, transitionsInEffect, visualsInEffect, finishesInEffect, newBlock, newVisual, copyBlock, removeBlock,
   nextBlock, playOrder, sections, automationValue, newEffect, newTrack, pruneAutomation, pruneSidechains, inapplicableParams, LIMITS, SongError,
 } from '../shared/song.js';
 import { registry } from 'gloaming-instruments';
@@ -123,6 +123,69 @@ test("visuals: the song's timing, the sound's colour, and shaped envelopes", () 
     block.visuals[0].bind = { swell: bad };
     assert.throws(() => normalizeSong(song), SongError, JSON.stringify(bad));
   }
+});
+
+test('visuals: a look may carry a palette, a halo and an atmosphere', () => {
+  const song = sampleSong();
+  const [block] = song.arrangement;
+  song.look.palette = ['#5E4FA8', '#f2789f', '#ffdfa8'];
+  song.look.halo = 3;
+  song.look.atmosphere = 0.2;
+  block.style = { palette: null, halo: 0 };
+  block.visuals[0].style = { palette: ['#ffffff'] };
+  let clean = normalizeSong(song);
+  assert.deepEqual(clean.look.palette, ['#5e4fa8', '#f2789f', '#ffdfa8']);
+  assert.equal(clean.look.halo, 1);
+  assert.equal(clean.look.atmosphere, 0.2);
+  assert.deepEqual(clean.arrangement[0].style, { palette: null, halo: 0 });
+  // One stop is no ramp; eight is too many; a name or a bad colour isn't stops.
+  assert.equal(clean.arrangement[0].visuals[0].style, undefined);
+  for (const bad of [new Array(8).fill('#000000'), 'ember', ['#000000', 'red']]) {
+    song.look.palette = bad;
+    assert.equal(normalizeSong(song).look.palette, null);
+  }
+  // A song saved before these existed gets the kit's own defaults.
+  delete song.look.palette;
+  delete song.look.halo;
+  delete song.look.atmosphere;
+  clean = normalizeSong(song);
+  assert.deepEqual([clean.look.palette, clean.look.halo, clean.look.atmosphere], [null, 1, 0.6]);
+});
+
+test("visuals: a visual's trail is bounded, and 0 turns off a default one", () => {
+  const song = sampleSong();
+  const [visual] = song.arrangement[0].visuals;
+  for (const [trail, kept] of [[0.9, 0.9], [1, 0.98], [-1, 0], [0, 0], ['long', undefined]]) {
+    visual.trail = trail;
+    assert.equal(normalizeSong(song).arrangement[0].visuals[0].trail, kept);
+  }
+});
+
+test('visuals: the finish, on the song and on blocks', () => {
+  const song = sampleSong();
+  song.arrangement.push(newBlock(song.patterns[0].id), newBlock(song.patterns[0].id), newBlock(song.patterns[0].id));
+  const [a, b, c] = song.arrangement;
+  song.finish = { preset: 'neon', grain: 1, tonemap: 'sepia', glow: 2 };
+  a.finish = { bloom: 1.5, vignette: 0.4 };
+  b.finish = { vignette: 0.1 };
+  c.finish = { preset: 'film', exposure: 1.2 };
+  const clean = normalizeSong(song);
+  assert.deepEqual(clean.finish, { preset: 'neon', grain: 0.2 });
+  assert.deepEqual(clean.arrangement.map((x) => x.finish), [a.finish, b.finish, c.finish, null]);
+  // Changes carry on block to block; a preset starts again from itself.
+  assert.deepEqual(finishesInEffect(clean), [
+    { bloom: 1.5, vignette: 0.4 },
+    { bloom: 1.5, vignette: 0.1 },
+    { preset: 'film', exposure: 1.2 },
+    { preset: 'film', exposure: 1.2 },
+  ]);
+
+  // A song saved before finishes existed keeps the kit's default; a block with nothing in its finish has none.
+  delete song.finish;
+  a.finish = { preset: 'shiny' };
+  const old = normalizeSong(song);
+  assert.deepEqual(old.finish, { preset: 'clean' });
+  assert.equal(old.arrangement[0].finish, null);
 });
 
 test('visuals: grid options keep their drawing, bounded', () => {
